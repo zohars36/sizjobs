@@ -1,0 +1,83 @@
+# ---------------------------------------------------------------
+# sizjobs .gitignore
+# This repo is public. .gitignore prevents accidents; gitleaks
+# (pre-commit and CI) and GitHub push protection catch the rest.
+# ---------------------------------------------------------------
+
+# Secrets and credentials: never committed
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+id_rsa*
+id_ed25519*
+kubeconfig*
+*.kubeconfig
+.aws/
+credentials.json
+token.json
+
+# Personal data: lives in the private bucket (MinIO, later S3)
+profile.yaml
+companies.yaml
+/private/
+# Raw email exports. Only sanitized fixtures under tests/fixtures/ are committed.
+/mail-raw/
+
+# Terraform (.terraform.lock.hcl IS committed)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+.terraform.tfstate.lock.info
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+# tfvars can hold secrets; commit only examples
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Evals output
+evals/output/
+.promptfoo/
+
+# Local runtime data at the repo root only (a code folder named models/ is fine)
+/models/
+/.local/
+*.log
+
+# Editors and OS
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Claude Code: personal, machine-local settings
+.claude/settings.local.json
+CLAUDE.local.md

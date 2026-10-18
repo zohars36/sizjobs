@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(terraform apply *)",
+      "Bash(terraform destroy *)",
+      "Bash(git push * main)"
+    ]
+  }
+}
