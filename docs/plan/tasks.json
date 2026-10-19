@@ -1,0 +1,1239 @@
+{
+ "product": "SizJobs",
+ "phases": [
+  {
+   "n": "A1",
+   "part": "Part A: local MVP on WSL",
+   "title": "Repo and local setup",
+   "goal": "A public repo with guardrails from the first commit, a protected AWS account for the API model, and a WSL setup that runs everything locally.",
+   "tasks": [
+    {
+     "id": "a1-1",
+     "t": "Public repository and layout",
+     "d": "Create a **public** `sizjobs` repo with `infra`, `platform`, `services`, `evals` and `docs/adr`. A public repo gets free Actions minutes on standard runners, free public packages in GHCR, branch protection and GitHub Pages, and it is your portfolio. Everything in it is visible, so secrets and personal data never go in (a1-2).",
+     "ok": "A PR cannot merge into main without green checks.",
+     "where": [
+      "wsl",
+      "cc",
+      "gh"
+     ],
+     "steps": [
+      "In WSL: `cd ~/code && gh repo create sizjobs --public --clone`",
+      "Add the .gitignore (a1-2), CLAUDE.md and .claude/settings.json from the templates at the top of this page, then start `claude` with the prompt.",
+      "GitHub → Settings → Rules: a ruleset on main that requires a PR and status checks and blocks force pushes.",
+      "Install the Renovate GitHub App and the Claude GitHub App on the repo.",
+      "Unzip the plan package into the repo and run `python3 scripts/create_issues.py --dry-run`, then without the flag, to turn this plan into GitHub Issues."
+     ],
+     "once": true,
+     "prompt": "Scaffold this repo: create infra/persistent, infra/ephemeral, platform, services/agent, services/mcp-tools, evals and docs/adr, each with a short README explaining its purpose. Keep the existing .gitignore, add CODEOWNERS with me as owner, and docs/adr/0000-template.md in Nygard format. Do not create any cloud resources."
+    },
+    {
+     "id": "a1-2",
+     "t": ".gitignore and secret guardrails",
+     "d": "The repo is public, so what must never be committed is settled on day one: a `.gitignore` for secrets, personal data, Terraform state and local runtime files, plus GitHub secret scanning with push protection. `.gitignore` only prevents accidents; gitleaks (a1-7) and push protection catch what it misses.",
+     "ok": "`git check-ignore -v .env profile.yaml infra/ephemeral/terraform.tfstate` shows all three ignored, and a push with a fake key is blocked.",
+     "where": [
+      "cc",
+      "gh"
+     ],
+     "steps": [
+      "Copy the .gitignore from the top of this page (it is also in the plan package) to the repo root before the first commit.",
+      "GitHub → Settings → Code security: check that secret scanning and push protection are on. They are free for public repos.",
+      "Never add a self-hosted runner to a public repo: a pull request from a fork could run code on your machine."
+     ],
+     "prompt": "Review the .gitignore at the repo root against this project (Terraform, Python with uv, k3d, MinIO, promptfoo, Claude Code). Add anything missing and explain each section in a comment. Then add a CI job that fails if any tracked file matches the secret or personal-data patterns, so a forced add is caught too."
+    },
+    {
+     "id": "a1-3",
+     "t": "AWS account, budget and GPU quota request",
+     "d": "Part A uses AWS only for the Bedrock API model, but protect the account now: MFA on root, a working user in IAM Identity Center, AWS Budgets alerts at $15, $30 and $50, and Cost Anomaly Detection. Request the GPU Spot quota now too, since approval can take days and Part B needs it.",
+     "ok": "A budget alert reaches your email, and root has no access keys.",
+     "where": [
+      "console"
+     ],
+     "steps": [
+      "Sign in as root, enable MFA under Security credentials, and delete any root access keys.",
+      "Enable IAM Identity Center in eu-central-1 and create a user for yourself with two permission sets: `AdministratorAccess` for the console, and `ReadOnlyAccess` for daily work from WSL and Claude Code.",
+      "Billing → Budgets: a $50 monthly budget with alerts at 30%, 60% and 100%. Billing → Cost Anomaly Detection: a daily email alert.",
+      "Service Quotas → Amazon EC2 in eu-central-1: request 8 vCPUs for **All G and VT Spot Instance Requests**. New accounts often have 0."
+     ],
+     "once": true
+    },
+    {
+     "id": "a1-4",
+     "t": "WSL2, Docker, VS Code and Claude Code",
+     "d": "Ubuntu 24.04 on WSL2 with Docker. Keep code under `~/code` inside WSL, not under `/mnt/c`, or Docker and git get very slow.",
+     "ok": "`docker run hello-world` works in WSL, and `claude` opens in the VS Code terminal.",
+     "where": [
+      "wsl"
+     ],
+     "steps": [
+      "PowerShell as admin: `wsl --install -d Ubuntu-24.04`, then `wsl --update`.",
+      "Docker: Docker Desktop with WSL integration for Ubuntu, or Docker Engine inside WSL. Both work.",
+      "In `.wslconfig` in your Windows user folder, set `memory=10GB` and `swap=4GB`. That leaves about 6GB for Windows, VS Code and the browser.",
+      "Install VS Code on Windows and the WSL extension. From WSL: `mkdir -p ~/code && cd ~/code && code .`",
+      "Install Claude Code inside WSL: `curl -fsSL https://claude.ai/install.sh | bash`, then run `claude` to sign in. It needs a Pro, Max or Team plan."
+     ],
+     "once": true
+    },
+    {
+     "id": "a1-5",
+     "t": "Tool versions with mise",
+     "d": "terraform, kubectl, helm, k3d, awscli, gh, uv and pre-commit pinned in `.mise.toml` in the repo.",
+     "ok": "A fresh machine is ready with one command.",
+     "where": [
+      "wsl",
+      "cc"
+     ],
+     "steps": [
+      "Install mise: `curl https://mise.run | sh`, and add its activate line to `~/.bashrc`.",
+      "After the prompt: `mise install`.",
+      "Set up a read-only AWS profile: `aws configure sso --profile sizjobs-ro` with the ReadOnly permission set, and `export AWS_PROFILE=sizjobs-ro` in `~/.bashrc`. This is the profile Claude Code sees."
+     ],
+     "prompt": "Create .mise.toml pinning terraform, kubectl, helm, k3d, awscli, gh, uv, go-task and pre-commit to current stable versions. Add a 'Local setup' section to the README that takes a fresh WSL Ubuntu to a working environment, including the AWS read-only SSO profile sizjobs-ro."
+    },
+    {
+     "id": "a1-6",
+     "t": "Taskfile for common commands",
+     "d": "`task dev:up` brings up k3d with its local registry and ArgoCD, `task build` builds images into the local registry, `task run` runs the agent once, and `task eval` runs evals.",
+     "ok": "`task dev:up` brings up the full local environment from nothing.",
+     "where": [
+      "cc",
+      "cloud"
+     ],
+     "steps": [
+      "Works in a cloud Claude Code session too, since it needs no AWS. Test locally: `task dev:up`, then `kubectl get pods -A`."
+     ],
+     "prompt": "Create Taskfile.yml with: dev:up (create or start the k3d cluster from the k3d config, install ArgoCD and point it at platform/ on the current branch), dev:down (stop the cluster, keeping data), build (build every service image and push it to the local k3d registry), secrets (see a1-8), run (see a4-6), eval, and placeholders up and down for Part B. Every task prints what it is doing."
+    },
+    {
+     "id": "a1-7",
+     "t": "pre-commit",
+     "d": "terraform fmt, tflint, trivy config, ruff and gitleaks before every commit.",
+     "ok": "A commit with a sample secret is blocked.",
+     "where": [
+      "cc",
+      "cloud"
+     ],
+     "steps": [
+      "After the prompt: `pre-commit install`.",
+      "Test: create a file with a fake AWS key and try to commit it. gitleaks should block it."
+     ],
+     "prompt": "Add .pre-commit-config.yaml with terraform_fmt, terraform_validate, tflint, a trivy config scan, ruff, ruff-format and gitleaks. Add .github/workflows/pre-commit.yml that runs the same hooks on every pull request."
+    },
+    {
+     "id": "a1-8",
+     "t": "Local secrets",
+     "d": "In Part A, secrets live in `~/.config/sizjobs/.env`, outside the repo. `task secrets` turns it into Kubernetes Secrets. In Part B, SSM and External Secrets produce Secrets with the same names, so no workload changes.",
+     "ok": "Pods get their secrets, and no secret is in git.",
+     "where": [
+      "cc",
+      "wsl"
+     ],
+     "steps": [
+      "Lock the file down: `chmod 600 ~/.config/sizjobs/.env`.",
+      "Keep `.env.example` in the repo with variable names only."
+     ],
+     "prompt": "Add task secrets: read ~/.config/sizjobs/.env and create or update Kubernetes Secrets per namespace, using the names Part B will produce from External Secrets (telegram, gmail, llm, langfuse, grafana, minio). Add .env.example with names only, and make sure .gitignore and gitleaks block any real .env."
+    },
+    {
+     "id": "a1-9",
+     "t": "Small local model for offline tests",
+     "d": "This laptop has no NVIDIA GPU, so a local model is for offline smoke tests only, not for daily scoring. Ollama with a 1.5–3B model, started when you need it and stopped after, because it competes with the cluster for RAM.",
+     "ok": "The smoke test passes against the local model with no internet.",
+     "where": [
+      "wsl",
+      "cc"
+     ],
+     "steps": [
+      "`curl -fsSL https://ollama.com/install.sh | sh`, then a small model, for example `ollama pull qwen2.5:1.5b`.",
+      "Check: `curl localhost:11434/v1/models`.",
+      "Stop it when you are done (`sudo systemctl stop ollama`); a loaded model holds RAM the cluster needs."
+     ],
+     "cost": "$0",
+     "prompt": "Make the agent's LLM endpoint configurable through LLM_BASE_URL, LLM_MODEL and LLM_API_KEY, defaulting to the local Ollama OpenAI-compatible endpoint. Add a smoke test that sends one chat completion with a tool call and fails with a clear message when the endpoint is down."
+    }
+   ]
+  },
+  {
+   "n": "A2",
+   "part": "Part A: local MVP on WSL",
+   "title": "Platform on k3d",
+   "goal": "The same GitOps platform you will later run on AWS, on your laptop for $0.",
+   "tasks": [
+    {
+     "id": "a2-1",
+     "t": "k3d cluster and local registry",
+     "d": "A single-node k3d cluster with a local image registry, sized for a 16GB laptop: Traefik disabled, and memory requests and limits on every workload.",
+     "ok": "`kubectl get nodes` shows one Ready node, and an image pushed to the local registry runs in the cluster.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "`k3d cluster stop` and `start` keep the cluster and its data between days.",
+      "Watch memory with `kubectl top pods -A` once metrics-server is running."
+     ],
+     "prompt": "Create a k3d config file for sizjobs: one server, a local registry at registry.localhost:5000, Traefik disabled, the k3s version pinned to the one we will run on EC2, and a host volume under ~/.local/share/sizjobs so data survives cluster restarts. Wire it into task dev:up and explain each setting."
+    },
+    {
+     "id": "a2-2",
+     "t": "ArgoCD app-of-apps",
+     "d": "Every platform component is an Application under `platform`. Use the minimal ArgoCD install to save memory. The repo is public, so ArgoCD pulls it with no credentials.",
+     "ok": "A new cluster reaches full state with no manual commands.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Open the UI with `kubectl port-forward -n argocd svc/argocd-server 8080:443`. The initial password is in the `argocd-initial-admin-secret` Secret."
+     ],
+     "prompt": "Set up ArgoCD app-of-apps: platform/root-app.yaml points at platform/apps/, with one Application per component, automated sync with prune and selfHeal, and sync waves so CRDs and operators come before workloads. Start with an empty demo app to prove the flow, and make it work the same on local k3d and on the EC2 cluster."
+    },
+    {
+     "id": "a2-3",
+     "t": "MinIO as local S3",
+     "d": "MinIO in the cluster as a stand-in for S3: buckets for backups and private data. Code talks to it through the S3 API, so moving to AWS S3 in Part B is a config change.",
+     "ok": "CNPG backups and the private profile land in MinIO buckets.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Install the `mc` client in WSL to inspect buckets: `mc alias set local http://localhost:9000 ...`."
+     ],
+     "prompt": "Deploy MinIO as an ArgoCD application with a persistent volume and small memory requests, create the buckets backups and private, and expose an S3 endpoint inside the cluster. Credentials come from the minio Secret created by task secrets."
+    },
+    {
+     "id": "a2-4",
+     "t": "Postgres with CloudNativePG",
+     "d": "A single instance with scheduled backups to MinIO. On AWS the same backups go to S3, and every bring-up restores from the latest one. Used for agent results and LiteLLM.",
+     "ok": "Restoring from a MinIO backup into a freshly created cluster brings the data back.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "This is the one stateful component, so test the backup and restore cycle before moving on."
+     ],
+     "prompt": "Add the CloudNativePG operator and a single-instance Cluster jobs with backups and WAL archiving to the MinIO bucket backups through its S3-compatible endpoint, using the backup method currently recommended for the CNPG version you install, plus a ScheduledBackup. Support bootstrapping by recovery from the latest backup when one exists and by initdb otherwise, controlled by a value. Keep the bucket endpoint configurable so Part B can point it at S3. Create databases for the agent and for LiteLLM."
+    },
+    {
+     "id": "a2-5",
+     "t": "Cluster security",
+     "d": "Default-deny NetworkPolicy in the app namespaces, and Pod Security at the restricted level.",
+     "ok": "A pod with no policy can't reach any service.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "k3s enforces NetworkPolicy out of the box, so you can test this on k3d too."
+     ],
+     "prompt": "Add namespaces agents, llm and data with the Pod Security Admission label restricted, a default-deny NetworkPolicy in each, and explicit allows: agents to the LiteLLM service and Postgres, llm to vLLM, and everything to kube-dns. Prove it with a temporary curl pod: allowed paths work and blocked paths time out."
+    }
+   ]
+  },
+  {
+   "n": "A3",
+   "part": "Part A: local MVP on WSL",
+   "title": "Model layer",
+   "goal": "One gateway and logical model names, so switching providers later is a config change, not a code change.",
+   "tasks": [
+    {
+     "id": "a3-1",
+     "t": "AI gateway with LiteLLM",
+     "d": "One endpoint for every agent: routing by logical model name, a budget per key, retries and fallback.",
+     "ok": "The agent knows only the gateway, not a specific provider.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Keep the master key in the .env (a1-8); in Part B it moves to SSM."
+     ],
+     "prompt": "Deploy the LiteLLM proxy in namespace llm through ArgoCD, with config in a ConfigMap: a logical model agent-model, Postgres for keys and spend tracking, a master key from External Secrets, and a virtual key for the agent with a monthly budget. Expose only a ClusterIP service."
+    },
+    {
+     "id": "a3-2",
+     "t": "API model as the main model",
+     "d": "With no local GPU, a cheap API model behind the gateway is the main model in Part A, for example through Amazon Bedrock. At one run a day the cost is a few dollars a month at most.",
+     "ok": "A full agent run in the cloud.",
+     "where": [
+      "console",
+      "cc"
+     ],
+     "steps": [
+      "In the Bedrock console in eu-central-1, check you have access to the model you picked. Some models in Europe are available through a cross-region inference profile.",
+      "Create an IAM user allowed only `bedrock:InvokeModel` on that model, put its key in the .env, and rotate it monthly. b4-5 replaces it with roles."
+     ],
+     "cost": "a few $/month",
+     "prompt": "Add a Bedrock-backed model to LiteLLM as agent-model-api, with credentials from the llm Secret, and route agent-model to it. Set a monthly budget on the agent key and explain where to see spend."
+    },
+    {
+     "id": "a3-3",
+     "t": "Logical model names",
+     "d": "The agent always asks for `agent-model`. Today it maps to the API model, and `local-small` maps to Ollama for offline tests. In Part B, `agent-model` moves to vLLM with the API as fallback. Only the gateway config changes.",
+     "ok": "Switching agent-model to another provider needs no change in the agent code.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "From inside k3d, Ollama on the WSL host is reachable at `host.k3d.internal`."
+     ],
+     "prompt": "Configure LiteLLM model aliases: agent-model goes to agent-model-api, and local-small goes to Ollama on the WSL host through host.k3d.internal. Add a smoke test that calls both, and document how to switch agent-model."
+    }
+   ]
+  },
+  {
+   "n": "A4",
+   "part": "Part A: local MVP on WSL",
+   "title": "Agent",
+   "goal": "The agent container, its tools and its guardrails, running every day from your laptop.",
+   "tasks": [
+    {
+     "id": "a4-1",
+     "t": "Agent container",
+     "d": "Hermes with headless Chromium on a Playwright base image, a non-root user, and config pointing at the gateway.",
+     "ok": "The image builds in CI and passes Trivy.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Build it into the local registry with `task build` and run it in k3d against agent-model."
+     ],
+     "prompt": "Write services/agent/Dockerfile: a Playwright Python base image pinned by digest, install Hermes Agent the way its current docs recommend plus our config, run as non-root with a read-only root filesystem except /tmp, and read LLM settings from environment variables. Keep the image small and explain each layer."
+    },
+    {
+     "id": "a4-2",
+     "t": "MCP tools server",
+     "d": "A small MCP server with defined tools: save a job, find duplicates, list jobs. The agent gets only these tools.",
+     "ok": "Every DB write goes through a tool, never free-form SQL.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Check the current Hermes docs for how to attach an MCP server, and give Claude the link."
+     ],
+     "prompt": "Build services/mcp-tools: a Python MCP server using the official MCP SDK that exposes save_job, find_duplicates and list_jobs backed by Postgres, with input validation and parameterized queries only. Add tests, a Dockerfile, and wire it into the agent's configuration."
+    },
+    {
+     "id": "a4-3",
+     "t": "Agent security",
+     "d": "Job posting text is untrusted input that can carry prompt injection. The agent has no tool that sends or applies, egress is limited by NetworkPolicy, and secrets never enter a prompt.",
+     "ok": "The injection tests in a7-4 pass.",
+     "where": [
+      "chat",
+      "cc"
+     ],
+     "steps": [
+      "Do a short threat model in chat: what could a malicious posting make the agent do, and what stops it."
+     ],
+     "prompt": "Review the agent as a security reviewer. Job posting text is untrusted input. List what an injected instruction could make the agent do with its current tools and network access, then tighten it: remove any tool that can send data out, add an egress NetworkPolicy allowing only DNS, the LiteLLM service, Postgres and outbound HTTPS, and make sure no secret ever reaches a prompt."
+    },
+    {
+     "id": "a4-4",
+     "t": "Job sources",
+     "d": "Sources are set in the product description: LinkedIn alerts from email, a company list from LinkedIn with each company's hiring system API, and the Microsoft careers site in v0.2. No automation on LinkedIn itself: it violates their terms and can get your account blocked.",
+     "ok": "The README lists each source and how it is accessed.",
+     "where": [
+      "chat"
+     ],
+     "steps": [
+      "The implementation is in a5-2, a5-3 and a5-8 in phase A5."
+     ]
+    },
+    {
+     "id": "a4-5",
+     "t": "Daily digest",
+     "d": "An English summary of new, ranked jobs sent to Telegram. Feedback buttons are added in a5-6.",
+     "ok": "A message arrives after every run.",
+     "where": [
+      "wsl",
+      "cc"
+     ],
+     "steps": [
+      "Create a bot with BotFather in Telegram and put its token in the .env."
+     ],
+     "prompt": "After each agent run, build a digest of new jobs ranked by relevance with title, company, location and link, and send it through the Telegram Bot API using the token from External Secrets. When there are no new jobs, send a short message saying so."
+    },
+    {
+     "id": "a4-6",
+     "t": "Daily run from the laptop",
+     "d": "The agent runs as a Kubernetes Job once a day, started by Windows Task Scheduler when the laptop is on: it starts WSL, makes sure the cluster is up, and runs `task run`.",
+     "ok": "On a morning the laptop is on, the digest arrives without you doing anything.",
+     "where": [
+      "wsl",
+      "cc"
+     ],
+     "steps": [
+      "Task Scheduler: a daily morning trigger with \"Run task as soon as possible after a scheduled start is missed\", running `wsl.exe -d Ubuntu-24.04 -- bash -lc \"cd ~/code/sizjobs && task run\"`.",
+      "If the laptop is off all day, that day is skipped. That is the trade-off of Part A."
+     ],
+     "prompt": "Implement task run: start the k3d cluster if it is stopped, wait for Postgres and LiteLLM to be ready, create the agent Job from its template, follow the logs and exit with the Job status. Make it safe to run twice in a day by skipping when a run for today already succeeded."
+    }
+   ]
+  },
+  {
+   "n": "A5",
+   "part": "Part A: local MVP on WSL",
+   "title": "Product: SizJobs MVP",
+   "goal": "The capabilities that turn the platform into a product: sources, understanding each job, and feedback that closes the loop. Full detail in the product description.",
+   "tasks": [
+    {
+     "id": "a5-1",
+     "t": "Private profile",
+     "d": "The profile from the defaults in the product description: target roles, must-haves, nice-to-haves and deal-breakers, no salary. The repo holds only an example; the real profile lives in the private bucket (MinIO now, S3 in Part B). The repo is public, so personal data never goes into git.",
+     "ok": "The agent loads the profile from the private bucket, and git holds no personal detail.",
+     "where": [
+      "cc",
+      "wsl"
+     ],
+     "steps": [
+      "Write `profile.yaml` outside the repo and upload it: `mc cp profile.yaml local/private/profile.yaml`",
+      "Same for `companies.yaml` from a5-3."
+     ],
+     "prompt": "Define a profile schema in services/agent/profile.example.yaml (target roles, must-haves, nice-to-haves, deal-breakers, location Israel only, no salary fields) and a loader that reads the real profile from the private bucket through the S3 API at startup, with the endpoint configurable for MinIO now and S3 later. The example is used only in tests. Make sure no real profile can be committed."
+    },
+    {
+     "id": "a5-2",
+     "t": "LinkedIn alerts from email",
+     "d": "A Gmail filter moves LinkedIn job alerts to a dedicated label. The agent connects over IMAP with an app password, opens only that label read-only, and splits each alert into individual jobs.",
+     "ok": "A real alert from the last week is parsed correctly into all its jobs.",
+     "where": [
+      "wsl",
+      "cc"
+     ],
+     "steps": [
+      "Google Account: enable 2-Step Verification and create an app password. Put it in the .env, never in a chat.",
+      "Gmail: a filter on the sender address of job alerts (check a real alert for the exact address) that adds the label `SizJobs/LinkedIn`.",
+      "Save 3–5 alerts under `mail-raw/` (ignored by git), then copy sanitized versions to `tests/fixtures/`: the repo is public, so remove your email address and name first."
+     ],
+     "learn": true,
+     "prompt": "Build services/agent/sources/linkedin_alerts.py: connect to Gmail over IMAP with the address and app password from the gmail Secret, open only the label SizJobs/LinkedIn read-only (EXAMINE, BODY.PEEK) so nothing is marked read, fetch messages after the last processed UID kept in Postgres, and parse each LinkedIn job alert into individual jobs: title, company, location, job URL and alert date. Keep only jobs located in Israel. Add parser tests against the sanitized .eml fixtures in tests/fixtures/."
+    },
+    {
+     "id": "a5-3",
+     "t": "Company list and hiring systems",
+     "d": "`companies.yaml` with 20–30 companies you build from LinkedIn, kept in the private bucket like the profile. For each company, detect its hiring system once and pull jobs in Israel from its API where one exists.",
+     "ok": "Every listed company has a working source, or an \"unsupported\" mark with a reason.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Greenhouse and Lever have public APIs for each company's job list. Companies on other systems are flagged and may move to Hermes later, like Microsoft."
+     ],
+     "prompt": "Create the companies.yaml schema (name, careers URL, optional ATS and board token) loaded from the private bucket, and a detector that identifies from a careers URL whether a company uses Greenhouse, Lever or something else, storing the result. Implement fetchers for the Greenhouse and Lever public job board APIs, keeping only jobs located in Israel. Report companies with an unsupported system instead of skipping them silently."
+    },
+    {
+     "id": "a5-4",
+     "t": "Normalization and duplicates",
+     "d": "One schema for all sources, and a fingerprint from company, normalized title and city, so the same job from email and from a careers page shows up once.",
+     "ok": "A job from two sources is stored as one record with two links.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Titles in LinkedIn alerts are shorter than on careers pages, so test normalization on real pairs."
+     ],
+     "prompt": "Define the normalized job schema shared by all sources and a fingerprint built from company, normalized title and city. Store one job row with a list of source URLs, and switch find_duplicates in mcp-tools to the fingerprint. Add tests where the same job arrives from a LinkedIn alert and from Greenhouse."
+    },
+    {
+     "id": "a5-5",
+     "t": "Classification, extraction and explanation",
+     "d": "The prompts that return a 0–100 score against the profile, extracted fields, and one English line on why it fits and one on what is missing. Output is structured JSON, and the prompt version is stored with every score.",
+     "ok": "On 20 real jobs the output is valid and the scores look right to you.",
+     "where": [
+      "chat",
+      "cc"
+     ],
+     "steps": [
+      "Write the first prompt yourself and ask for a critique in chat. This is the heart of the product, worth understanding word by word."
+     ],
+     "learn": true,
+     "prompt": "Implement the assessment step: given a normalized job and the profile, call agent-model through LiteLLM and return JSON with score 0-100, extracted fields (title, seniority, location, work model, stack), and why_fit and gaps as one English sentence each. Validate against a JSON schema, retry once on invalid output, and store prompt_version and model with every assessment."
+    },
+    {
+     "id": "a5-6",
+     "t": "Feedback buttons in Telegram",
+     "d": "Up to 10 jobs with a score of 60 or more, one card per job with Relevant, Not relevant and Save buttons. The environment has no public address for a webhook, so presses are collected with getUpdates while it is up.",
+     "ok": "A press in Telegram appears in the feedback table.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Telegram keeps unfetched updates for up to 24 hours. A press not collected in that window is lost, which is acceptable for now."
+     ],
+     "prompt": "Extend the Telegram digest: English text, up to 10 jobs with score >= 60, one message per job with inline buttons Relevant, Not relevant and Save. The environment has no public endpoint, so collect button presses with getUpdates at the start of each run and while the environment is up, and write them to the feedback table. Not relevant asks for a reason from a short fixed list."
+    },
+    {
+     "id": "a5-7",
+     "t": "Feedback into the golden dataset",
+     "d": "Every press becomes a label in the golden dataset, so evals grow from real use. Labels come in through a PR, so you review them before they become test data.",
+     "ok": "After a week the dataset has labels that came from feedback.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "The repo is public, so labels in it are public too. If you would rather keep them private, store the dataset in the private bucket and have the evals read it from there."
+     ],
+     "prompt": "Add a job that exports new feedback rows into evals/golden as labeled examples (job text, label, reason), deduplicated by job fingerprint, and opens a pull request with the additions so I can review them before they become test data."
+    },
+    {
+     "id": "a5-8",
+     "t": "Microsoft source (v0.2)",
+     "d": "Jobs in Israel from Microsoft's careers site, through Hermes and the browser. The product's first agentic source.",
+     "ok": "Microsoft jobs in Israel appear in the digest.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Start only after the MVP has run for two weeks."
+     ],
+     "learn": true,
+     "prompt": "Add a Microsoft careers source run by Hermes with headless Chromium: search for jobs located in Israel, open each new posting and return the normalized job schema. Keep a slow request rate, stop and report on any CAPTCHA or block instead of working around it, and add tests against saved pages."
+    }
+   ]
+  },
+  {
+   "n": "A6",
+   "part": "Part A: local MVP on WSL",
+   "title": "Observability",
+   "goal": "See every run, every LLM call and every dollar, and get alerted when something breaks.",
+   "tasks": [
+    {
+     "id": "a6-1",
+     "t": "Metrics and logs in Grafana Cloud",
+     "d": "Grafana Alloy in the cluster shipping to the free tier: node, kube-state and LiteLLM metrics, plus logs. GPU and vLLM metrics join in Part B.",
+     "ok": "You can see each run and its resource use in Grafana.",
+     "where": [
+      "wsl",
+      "cc"
+     ],
+     "steps": [
+      "Open a free Grafana Cloud account and put the Alloy credentials in the .env. Keep active series low; the laptop cluster is small."
+     ],
+     "cost": "$0",
+     "prompt": "Deploy Grafana Alloy using the official Kubernetes monitoring Helm chart as an ArgoCD application, sending metrics and logs to Grafana Cloud with credentials from the grafana Secret. Scrape node metrics, kube-state-metrics and LiteLLM; vLLM and dcgm-exporter are added in Part B. Keep memory requests small and active series low enough for the free tier, and list what you dropped."
+    },
+    {
+     "id": "a6-2",
+     "t": "Tracing in Langfuse Cloud",
+     "d": "A LiteLLM callback that ships every call: prompt, tokens, latency and cost. Self-hosting Langfuse needs ClickHouse and doesn't fit a small server.",
+     "ok": "Each agent run shows up as one trace.",
+     "where": [
+      "wsl",
+      "cc"
+     ],
+     "steps": [
+      "Pick the EU region in Langfuse Cloud. Put the keys in the .env."
+     ],
+     "cost": "$0",
+     "prompt": "Enable LiteLLM's Langfuse callback with keys from External Secrets, and pass a run id from the agent as trace metadata so each agent run groups into one trace."
+    },
+    {
+     "id": "a6-3",
+     "t": "Dashboards as code",
+     "d": "Dashboards as JSON in the repo, applied through the Grafana API: agent (runs, duration, jobs found, cost per run, digest precision) and LLM usage. Inference panels for vLLM come in Part B.",
+     "ok": "A dashboard is rebuilt from git.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "In Part B they can move to the Grafana Terraform provider, with state in S3."
+     ],
+     "prompt": "Create dashboards as JSON under observability/dashboards: agent (runs, duration, jobs found, failures, cost per run, digest precision from the feedback table) and LLM usage (tokens, cost and latency per model). Add task dashboards that applies them through the Grafana HTTP API with a token from the .env."
+    },
+    {
+     "id": "a6-4",
+     "t": "Alerts",
+     "d": "Run failed, no new jobs for three days, and daily LLM cost above a limit. Sent to Telegram. GPU alerts join in Part B.",
+     "ok": "Every alert was triggered once on purpose and checked.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Don't tick this task until you have seen every alert arrive."
+     ],
+     "prompt": "Add Grafana alert rules for: agent run failed, zero new jobs for 3 days, and daily LLM spend above a configurable limit. Use a Telegram contact point. Then tell me how to trigger each alert once to test it."
+    }
+   ]
+  },
+  {
+   "n": "A7",
+   "part": "Part A: local MVP on WSL",
+   "title": "Evals and quality gates",
+   "goal": "A prompt or model change can't reach main if it lowers quality.",
+   "tasks": [
+    {
+     "id": "a7-1",
+     "t": "Golden dataset",
+     "d": "50–100 real jobs labeled relevant or not, with expected fields: title, seniority, location, work model.",
+     "ok": "The dataset is in the repo with a README explaining the labeling rules.",
+     "where": [
+      "chat",
+      "cc"
+     ],
+     "steps": [
+      "The target roles are already set as defaults in the product description; save them to `docs/target-roles.md`.",
+      "You do the labeling yourself. It is your judgment, and Claude can't replace it."
+     ],
+     "once": true,
+     "prompt": "Create the schema for evals/golden/jobs.jsonl and a README with labeling rules based on docs/target-roles.md, plus a small script that exports raw postings from the jobs table into a file ready for me to label."
+    },
+    {
+     "id": "a7-2",
+     "t": "Eval harness with promptfoo",
+     "d": "Measures classification accuracy, field extraction accuracy, valid JSON, latency and cost.",
+     "ok": "`task eval` prints a score for each metric.",
+     "where": [
+      "cloud",
+      "cc"
+     ],
+     "steps": [
+      "A good fit for a cloud Claude Code session alongside the platform track. Run it against a real model locally."
+     ],
+     "learn": true,
+     "prompt": "Set up promptfoo in evals/: run the agent's classification and extraction prompts against evals/golden/jobs.jsonl through LiteLLM, with assertions for classification accuracy, field-level extraction accuracy, valid JSON, latency and cost. Wire it to task eval and document how to read the results."
+    },
+    {
+     "id": "a7-3",
+     "t": "CI gate",
+     "d": "A PR that touches prompts or model config runs evals against the API model and fails below the threshold. In Part A the workflow uses the scoped Bedrock key from GitHub Secrets; b4-5 switches it to OIDC.",
+     "ok": "A PR that lowers quality is blocked.",
+     "where": [
+      "cc",
+      "gh"
+     ],
+     "steps": [
+      "Evals cost Actions minutes and tokens, so run them only on PRs that touch prompts or model config.",
+      "Test: open a PR that breaks the prompt on purpose and check it gets blocked.",
+      "Use the `pull_request` trigger, never `pull_request_target`: on a public repo that trigger can expose secrets to pull requests from forks."
+     ],
+     "prompt": "Add .github/workflows/evals.yml: on pull requests touching prompts or model config, run promptfoo against agent-model-api using the scoped Bedrock credentials from GitHub Secrets (to be replaced by OIDC in Part B), post the score difference versus main as a PR comment, and fail below the thresholds in evals/thresholds.yaml. Use path filters so other PRs skip it."
+    },
+    {
+     "id": "a7-4",
+     "t": "Prompt injection tests",
+     "d": "Job postings with embedded instructions to the agent, like sending data out or ignoring its rules. The tests check the agent doesn't follow them.",
+     "ok": "All cases pass.",
+     "where": [
+      "cloud",
+      "cc"
+     ],
+     "steps": [
+      "Add a new case whenever you think of a new attack."
+     ],
+     "prompt": "Add evals/injection/: 15 job postings with embedded instructions (send data somewhere, call tools, change the ranking, ignore your rules). Assert that the agent never follows them, never calls a tool it does not need for classification, and still classifies each posting correctly."
+    }
+   ]
+  },
+  {
+   "n": "A8",
+   "part": "Part A: local MVP on WSL",
+   "title": "CI",
+   "goal": "Every PR is linted, tested, built and scanned, within the Free plan's Actions minutes.",
+   "tasks": [
+    {
+     "id": "a8-1",
+     "t": "Build, sign and deploy pipeline",
+     "d": "ruff and pytest, docker buildx with the GitHub Actions cache, and Trivy failing on Critical. On main, images go to GHCR, which is free for public packages, are signed with cosign, and the new tag reaches `platform` through an auto-merged PR; ArgoCD on the laptop deploys it. `task build` with the local registry stays for quick iteration on a branch.",
+     "ok": "A merge to main deploys a signed image to the laptop cluster with no manual step.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Make each GHCR package public in its package settings, so the cluster pulls without credentials.",
+      "Rollback is `git revert` of the tag-bump commit."
+     ],
+     "prompt": "Create .github/workflows/build.yml for services/*: ruff, pytest, docker buildx with the GitHub Actions cache, and a Trivy scan that fails on CRITICAL. On pull requests, build and scan only. On pushes to main, push to ghcr.io/<owner>/sizjobs-<service> tagged with the git SHA, sign with keyless cosign, and update the tag in platform/apps/<service>/values.yaml. main is protected, so open the bump as a pull request with auto-merge instead of pushing to main. Build only services whose paths changed, and never call kubectl from CI."
+    },
+    {
+     "id": "a8-2",
+     "t": "Manifest checks",
+     "d": "helm lint and kubeconform on every PR that touches `platform`.",
+     "ok": "A broken manifest never reaches main.",
+     "where": [
+      "cloud",
+      "cc"
+     ],
+     "steps": [
+      "A good task for a cloud Claude Code session."
+     ],
+     "prompt": "Add a platform-check workflow: helm template every chart with its values, then run kubeconform with CRD schemas for ArgoCD, CloudNativePG and External Secrets. Run it on pull requests touching platform/."
+    },
+    {
+     "id": "a8-3",
+     "t": "Renovate",
+     "d": "Image, chart, provider and Actions updates open as PRs, with automerge for patch updates when checks pass.",
+     "ok": "Update PRs open by themselves.",
+     "where": [
+      "cloud",
+      "cc"
+     ],
+     "steps": [
+      "The app was installed in a1-1; this only tunes the config."
+     ],
+     "prompt": "Tune renovate.json: separate groups for Terraform providers, Helm charts and GitHub Actions, automerge patch updates when checks pass, pin Docker images by digest, and schedule update PRs for weekends."
+    }
+   ]
+  },
+  {
+   "n": "B1",
+   "part": "Part B: move to AWS",
+   "title": "AWS foundations",
+   "goal": "Region choice, Terraform state, the persistent layer and keyless GitHub access.",
+   "tasks": [
+    {
+     "id": "b1-1",
+     "t": "Region: eu-central-1",
+     "d": "Frankfurt: close to Israel, with a wider GPU selection than il-central-1 and Amazon Bedrock support. Check g4dn.xlarge Spot price history per Availability Zone, and let the GPU ASG use several AZs and instance types (g5.xlarge too) to find capacity.",
+     "ok": "ADR 0001 documents the region and AZ choice.",
+     "where": [
+      "console",
+      "chat"
+     ],
+     "steps": [
+      "EC2 → Spot Requests → Pricing history: compare g4dn.xlarge and g5.xlarge across the three AZs.",
+      "Check that the GPU quota requested in a1-3 was approved.",
+      "Draft ADR 0001 in chat and commit it."
+     ]
+    },
+    {
+     "id": "b1-2",
+     "t": "Persistent layer and Terraform state",
+     "d": "A `persistent` stack you apply once from WSL and never destroy: S3 for state (versioning, encryption, locking with `use_lockfile`, no DynamoDB), S3 for backups and model weights, OIDC, SSM parameters and Budgets. Everything else lives in the `ephemeral` stack.",
+     "ok": "The persistent layer costs under $1 a month, and `terraform init` for ephemeral works against it.",
+     "where": [
+      "cc",
+      "wsl"
+     ],
+     "steps": [
+      "Claude Code writes the stack and runs `terraform plan`.",
+      "You run `terraform apply` yourself with the Admin profile. This is one of only two local applies in the project.",
+      "After the apply, move persistent's own state into the new bucket: enable the backend block and run `terraform init -migrate-state`."
+     ],
+     "once": true,
+     "prompt": "In infra/persistent write Terraform for AWS eu-central-1 with default_tags project=sizjobs and layer=persistent: an S3 state bucket with versioning, encryption, public access block and a lifecycle rule for noncurrent versions; an S3 data bucket with prefixes backups/ and models/ and lifecycle rules; an SNS topic alerts with an email subscription to a variable; and an AWS Budget matching CLAUDE.md. Start with local state and add a commented S3 backend block with use_lockfile = true for after migration. In the README, list each resource and its expected monthly cost."
+    },
+    {
+     "id": "b1-3",
+     "t": "GitHub OIDC",
+     "d": "An IAM OIDC provider and two roles: `gha-plan`, read-only for PRs, and `gha-apply`, only for main in the production environment. No long-lived access keys in GitHub.",
+     "ok": "A workflow runs `aws sts get-caller-identity` with no secrets.",
+     "where": [
+      "cc",
+      "wsl",
+      "gh"
+     ],
+     "steps": [
+      "Claude Code adds OIDC to persistent, and you run one more local apply.",
+      "GitHub → Settings → Environments: create production, optionally with required approval.",
+      "Store the role ARNs as GitHub Variables. They are not secret, so Secrets are not needed."
+     ],
+     "once": true,
+     "prompt": "Add GitHub Actions OIDC to infra/persistent: the token.actions.githubusercontent.com identity provider; a role gha-plan with ReadOnlyAccess plus read/write on the state bucket lock file, trusted only for pull_request events from <owner>/sizjobs; and a role gha-apply trusted only for environment:production, with permissions scoped to the services this project uses. Add .github/workflows/oidc-check.yml that assumes gha-plan and runs aws sts get-caller-identity."
+    }
+   ]
+  },
+  {
+   "n": "B2",
+   "part": "Part B: move to AWS",
+   "title": "AWS infrastructure in Terraform",
+   "goal": "Every cloud resource is created from code, through a PR, with no console clicks.",
+   "tasks": [
+    {
+     "id": "b2-1",
+     "t": "Network without NAT",
+     "d": "A VPC with two public subnets and no NAT Gateway, saving about $32 a month. Security groups have no inbound rules; all access goes through SSM.",
+     "ok": "Checkov and Trivy pass, and no port is open to the internet.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Until b2-7 is ready, apply ephemeral locally with the Admin profile. After b2-7, only through CI."
+     ],
+     "prompt": "In infra/ephemeral, using the S3 backend from infra/persistent and default_tags project=sizjobs layer=ephemeral, create a VPC 10.20.0.0/16 with two public subnets in different AZs, an internet gateway, no NAT gateway, a free S3 gateway endpoint, and a security group with no ingress rules and open egress. Run terraform plan with the read-only profile and summarize what it creates and what it costs per hour."
+    },
+    {
+     "id": "b2-2",
+     "t": "k3s server on Spot",
+     "d": "A t3a.large Spot instance that terminates on interruption, since nothing on it needs to survive. PVCs use local-path on the root disk, so no orphaned EBS volume is left after destroy. IMDSv2 required, encrypted gp3, an SSM role. user-data installs k3s and ArgoCD and stores the join token in SSM Parameter Store.",
+     "ok": "After apply, the cluster comes up and syncs from git with no manual steps.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Check: `aws ssm start-session --target <instance-id>`, then `sudo k3s kubectl get nodes` inside.",
+      "Install the Session Manager plugin for the AWS CLI in WSL; start-session doesn't work without it."
+     ],
+     "cost": "~$0.04/hour",
+     "prompt": "Add a k3s server to infra/ephemeral: t3a.large one-time spot with terminate on interruption, the latest Ubuntu 24.04 AMI from the public SSM parameter, IMDSv2 required, 30GB encrypted gp3 root, an instance profile with AmazonSSMManagedInstanceCore and read on /sizjobs/* parameters, a public IP and no key pair. user-data installs a pinned k3s version, writes the node token to SSM /sizjobs/k3s/token, installs ArgoCD and applies platform/root-app.yaml. Output the instance id. Comment every step of the boot script."
+    },
+    {
+     "id": "b2-3",
+     "t": "GPU node in an Auto Scaling Group",
+     "d": "A launch template for g4dn.xlarge (T4, 16GB) Spot in an ASG with desired=0. At boot: NVIDIA drivers, join k3s with the token, and a dedicated GPU taint.",
+     "ok": "Scaling to 1 adds a GPU node in under 10 minutes.",
+     "where": [
+      "cc",
+      "wsl"
+     ],
+     "steps": [
+      "Make sure the GPU quota from b1-1 was approved, or the ASG fails quietly.",
+      "Check: `aws autoscaling set-desired-capacity --auto-scaling-group-name <name> --desired-capacity 1`, watch the node join, then set it back to 0.",
+      "Go through the user-data line by line with Claude. Interviewers like asking about this part."
+     ],
+     "cost": "~$0.25/hour",
+     "learn": true,
+     "prompt": "Add a GPU worker Auto Scaling Group to infra/ephemeral: a launch template with a mixed instances policy (g4dn.xlarge and g5.xlarge), spot only, capacity-optimized allocation, both public subnets, desired 0 and max 1, group metrics enabled. Use a current AWS Deep Learning Base GPU AMI for Ubuntu found through its public SSM parameter, so NVIDIA drivers are preinstalled. user-data joins k3s as an agent using the token from SSM, with node label gpu=true and taint gpu=true:NoSchedule. Explain each step of the boot script in comments."
+    },
+    {
+     "id": "b2-4",
+     "t": "GPU cost guard",
+     "d": "An ASG scheduled action that sets desired=0 every day at a fixed time, and a CloudWatch alarm on a GPU node running longer than two hours. It protects you from a surprise bill when something gets stuck.",
+     "ok": "A GPU node left running shuts itself down.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "The SNS alert topic must live in the persistent layer (b1-2). In ephemeral it would be destroyed every night, and you would have to reconfirm the email subscription every morning."
+     ],
+     "prompt": "Add a GPU cost guard to infra/ephemeral: an ASG scheduled action that sets desired capacity to 0 every day at 20:00 UTC, and a CloudWatch alarm on GroupInServiceInstances greater than 0 for 120 minutes that notifies the persistent SNS topic alerts (read its ARN from SSM or a data source)."
+    },
+    {
+     "id": "b2-5",
+     "t": "S3 permissions",
+     "d": "In the persistent layer: S3 for model weights, backups and private data, with lifecycle rules. Every resource is tagged `project=sizjobs`. Images stay in public GHCR, so there is no ECR.",
+     "ok": "Cost Explorer shows cost by that tag.",
+     "where": [
+      "cc",
+      "console"
+     ],
+     "steps": [
+      "Most of these resources were created in b1-2. This task grants the instances access to them.",
+      "Billing → Cost allocation tags: activate `project` and `layer`. They can take up to 24 hours to appear."
+     ],
+     "prompt": "Grant the k3s server and GPU worker instance roles read/write only on the data bucket prefixes backups/, models/ and private/. Use least privilege and explain each statement."
+    },
+    {
+     "id": "b2-6",
+     "t": "Secrets in SSM Parameter Store",
+     "d": "SecureString, free in the standard tier, instead of Secrets Manager.",
+     "ok": "No secret in code, in git history, or in a chat with Claude.",
+     "where": [
+      "wsl"
+     ],
+     "steps": [
+      "Enter secrets yourself from the terminal with the Admin profile: `aws ssm put-parameter --type SecureString --name /sizjobs/telegram/token --value '...'`",
+      "Start the command with a space so bash doesn't save it to history (works when HISTCONTROL includes ignorespace, the Ubuntu default).",
+      "Keep only a list of parameter names in the repo, never values."
+     ]
+    },
+    {
+     "id": "b2-7",
+     "t": "Terraform CI",
+     "d": "On PR: fmt, validate, tflint, Checkov, the plan as a PR comment, and Infracost showing what the change costs. On merge to main: automatic apply.",
+     "ok": "Infrastructure changes only go through PRs.",
+     "where": [
+      "cc",
+      "gh"
+     ],
+     "steps": [
+      "Infracost needs a free API key; store it as a GitHub Secret.",
+      "Open a small PR to test it and check that the plan and cost comments appear."
+     ],
+     "prompt": "Create .github/workflows/terraform.yml for infra/ephemeral and infra/persistent. On pull_request: assume gha-plan via OIDC, run fmt -check, validate, tflint, checkov and plan, and post the plan plus an Infracost breakdown as a PR comment. On push to main: assume gha-apply in environment production and apply ephemeral only. Persistent applies only through a manual workflow_dispatch. Pin every action by commit SHA."
+    }
+   ]
+  },
+  {
+   "n": "B3",
+   "part": "Part B: move to AWS",
+   "title": "Daily cycle: up and down",
+   "goal": "One command builds everything in the morning, one command destroys it in the evening, and nothing is left billing.",
+   "tasks": [
+    {
+     "id": "b3-1",
+     "t": "Split into persistent and ephemeral",
+     "d": "Everything billed per hour (EC2, IPv4, EBS) lives in ephemeral. Persistent holds only what is cheap to keep and expensive to lose. Every ephemeral resource is tagged `layer=ephemeral`.",
+     "ok": "`terraform destroy` on ephemeral touches no data.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Mostly a review of what already exists. Run it again whenever a resource is added."
+     ],
+     "prompt": "Review infra/ and confirm that every resource that bills while it exists is in infra/ephemeral, and that infra/persistent holds only storage, IAM, alerting and other free or near-free resources. List anything misplaced and propose the move."
+    },
+    {
+     "id": "b3-2",
+     "t": "Up workflow: env-up",
+     "d": "GitHub Actions with workflow_dispatch: terraform apply for ephemeral, wait for k3s to be ready and ArgoCD synced (checked through SSM Run Command), and confirm Postgres was restored. It ends with a message showing how long it took.",
+     "ok": "From one click to a working environment with no manual steps, targeting about 15 minutes.",
+     "where": [
+      "cc",
+      "gh"
+     ],
+     "steps": [
+      "Run it a few times and note which stage is slowest. That is the input for b3-9."
+     ],
+     "learn": true,
+     "prompt": "Create .github/workflows/env-up.yml (workflow_dispatch, environment production, concurrency group env): terraform apply infra/ephemeral, wait for the instance to be online in SSM, then use SSM Run Command to wait until the node is Ready, every ArgoCD application is Synced and Healthy, and the Postgres cluster is ready. Fail with a clear message after 20 minutes. Write the elapsed time per stage to the job summary."
+    },
+    {
+     "id": "b3-3",
+     "t": "Down workflow: env-down",
+     "d": "Back up Postgres to S3 and wait for it, scale the GPU ASG to 0, run terraform destroy for ephemeral, then check for leftovers. If the backup fails, destroy does not run and you get an alert, so no data is lost.",
+     "ok": "After down, nothing is billed per hour.",
+     "where": [
+      "cc",
+      "gh"
+     ],
+     "steps": [
+      "Test: write a row to the DB, run down and then up, and check the row is still there."
+     ],
+     "prompt": "Create .github/workflows/env-down.yml (workflow_dispatch plus schedule, same concurrency group as env-up): trigger an on-demand CloudNativePG backup through SSM Run Command and wait for it to complete; if it fails, stop and notify instead of destroying. Then set the GPU ASG to 0, run terraform destroy on infra/ephemeral, and run scripts/leftover-check.sh."
+    },
+    {
+     "id": "b3-4",
+     "t": "Leftover check",
+     "d": "At the end of env-down: find resources tagged `layer=ephemeral` through the Resource Groups Tagging API, plus untagged instances, volumes, IPs, load balancers and NAT gateways. Common leftovers: EBS volumes from PVCs, ENIs, and CloudWatch log groups created outside Terraform.",
+     "ok": "env-down fails and alerts when something is left.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Test: create a small volume by hand with the ephemeral tag and run the script. It should fail."
+     ],
+     "prompt": "Write scripts/leftover-check.sh: using the Resource Groups Tagging API, list resources tagged layer=ephemeral in eu-central-1, and separately list EC2 instances, EBS volumes, Elastic IPs, network interfaces, load balancers, NAT gateways and CloudWatch log groups that are not tagged layer=persistent. Exit non-zero and print a readable table when anything is found."
+    },
+    {
+     "id": "b3-5",
+     "t": "Nightly destroy as a safety net",
+     "d": "A schedule on env-down that runs every night in case you forget. GitHub cron runs in UTC, so `0 21 * * *` is 23:00 in winter and 00:00 in summer in Israel.",
+     "ok": "An evening you forget to run down still ends at $0 an hour.",
+     "where": [
+      "gh"
+     ],
+     "steps": [
+      "Make sure destroy on an already-destroyed environment succeeds instead of failing.",
+      "In a public repo, GitHub disables scheduled workflows after 60 days with no repo activity. After a long break, check they are still enabled."
+     ]
+    },
+    {
+     "id": "b3-6",
+     "t": "Commands from WSL",
+     "d": "`task up` and `task down` trigger the workflows with `gh workflow run` and wait with `gh run watch`.",
+     "ok": "One command in the morning and one in the evening.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Add `task status` too, so you can see at a glance whether anything is running."
+     ],
+     "prompt": "Implement task up and task down in Taskfile.yml: run gh workflow run env-up.yml or env-down.yml, find the new run id, follow it with gh run watch, and print the total duration. Add task status, which reports whether the environment is up by looking for running instances tagged layer=ephemeral."
+    },
+    {
+     "id": "b3-7",
+     "t": "No double runs",
+     "d": "A concurrency group shared by up and down, so they never run at the same time.",
+     "ok": "A double click never leaves the environment half built.",
+     "where": [
+      "gh"
+     ],
+     "steps": [
+      "Already part of the b3-2 and b3-3 prompts. Test: trigger up and immediately down, and check that down waits in the queue."
+     ]
+    },
+    {
+     "id": "b3-8",
+     "t": "Scheduled agent run (optional)",
+     "d": "If the agent should run on days you don't work: a scheduled workflow that runs up, the agent, and down in sequence. The extra cost is mostly one GPU hour a day.",
+     "ok": "The digest arrives even on days the environment is off.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Only after b5-4 is stable."
+     ],
+     "cost": "a few $/month",
+     "prompt": "Create .github/workflows/daily-run.yml on a 05:00 UTC schedule that calls env-up as a reusable workflow, triggers the agent job through SSM and waits for it, and always calls env-down afterwards, including on failure."
+    },
+    {
+     "id": "b3-9",
+     "t": "DR measured by the daily bring-up",
+     "d": "The daily bring-up is a full DR drill: every morning the system is rebuilt from Terraform and git, and Postgres is restored from S3. Push the bring-up duration to Grafana on every run.",
+     "ok": "A graph of recovery time over time is in the README.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Interview line: \"My environment goes through a full DR drill every morning, and this is its RTO over two months.\""
+     ],
+     "prompt": "In env-up, record the elapsed time of each stage (terraform, node ready, ArgoCD synced, database restored) and push them as metrics to Grafana Cloud. Add a dashboard panel that shows the trend over time."
+    }
+   ]
+  },
+  {
+   "n": "B4",
+   "part": "Part B: move to AWS",
+   "title": "Platform on AWS",
+   "goal": "The Part A platform moves to AWS: S3, SSM and IAM roles replace their local stand-ins, with the same images from GHCR.",
+   "tasks": [
+    {
+     "id": "b4-1",
+     "t": "Move storage from MinIO to S3",
+     "d": "Point CNPG backups, the profile and the company list at S3 instead of MinIO, and copy the existing data over once. MinIO stays for local development.",
+     "ok": "A bring-up on AWS restores yesterday's data from S3.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Run the copy once with the Admin profile, then check the restore before you rely on it."
+     ],
+     "prompt": "Make the S3 endpoint and bucket names configurable per environment (local MinIO, AWS S3), add an AWS overlay that uses S3 through the instance role, and write a one-time script that copies the MinIO buckets to S3."
+    },
+    {
+     "id": "b4-2",
+     "t": "External Secrets Operator",
+     "d": "Syncs secrets from SSM Parameter Store into Kubernetes Secrets with the same names `task secrets` creates in Part A, so no workload changes. The IAM permission is scoped to the project path.",
+     "ok": "A parameter change in SSM shows up in the cluster.",
+     "where": [
+      "cc",
+      "chat"
+     ],
+     "steps": [
+      "k3s on EC2 has no IRSA, so all pods on a node share the instance profile. Fine for phase 1, and a good ADR: what the risk is and what you would do on EKS."
+     ],
+     "prompt": "Add External Secrets Operator via Helm as an ArgoCD application, a ClusterSecretStore for AWS Parameter Store that uses the node instance profile, and an example ExternalSecret for /sizjobs/telegram/token."
+    },
+    {
+     "id": "b4-3",
+     "t": "Operator access through SSM",
+     "d": "SSM port forwarding to the k3s API, ArgoCD and internal services, wrapped in `task tunnel`. No public ingress in this phase, which saves an ALB.",
+     "ok": "kubectl works from WSL with no open port.",
+     "where": [
+      "cc",
+      "wsl"
+     ],
+     "steps": [
+      "The kubeconfig has admin rights on the cluster. Keep it in `~/.kube` only, never in the repo."
+     ],
+     "prompt": "Implement task tunnel: SSM port-forward 6443 and ArgoCD 8080 from the k3s instance found by tag, fetch the kubeconfig through SSM into ~/.kube/sizjobs with server https://127.0.0.1:6443, and print how to use it."
+    },
+    {
+     "id": "b4-4",
+     "t": "Same images and deploys on AWS",
+     "d": "The AWS cluster syncs the same repo through ArgoCD and pulls the same signed images from GHCR. Only the aws values overlay differs.",
+     "ok": "A merge to main deploys to the laptop and to AWS alike.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Optional: verify cosign signatures at admission with a policy engine, as a later hardening step."
+     ],
+     "prompt": "Add an aws values overlay per application under platform/ and an ArgoCD root app for AWS that uses it. Confirm the AWS cluster pulls the public GHCR images without credentials, and document every difference between the local and aws overlays."
+    },
+    {
+     "id": "b4-5",
+     "t": "Bedrock through roles, not keys",
+     "d": "Drop the scoped Bedrock key from a3-2: on AWS, LiteLLM uses the instance role, and the evals workflow assumes an OIDC role allowed only `bedrock:InvokeModel`.",
+     "ok": "No long-lived AWS key exists anywhere.",
+     "where": [
+      "cc",
+      "console"
+     ],
+     "steps": [
+      "Delete the IAM user from a3-2 once both paths work."
+     ],
+     "prompt": "Replace the static Bedrock credentials: LiteLLM on AWS uses the node instance role, and evals.yml assumes a new OIDC role in infra/persistent that allows only bedrock:InvokeModel on the eval model. Keep the local path working with the .env key until I delete it."
+    }
+   ]
+  },
+  {
+   "n": "B5",
+   "part": "Part B: move to AWS",
+   "title": "Self-hosted model on GPU",
+   "goal": "vLLM on a Spot GPU, fallback to the API, and the benchmark that compares them.",
+   "tasks": [
+    {
+     "id": "b5-1",
+     "t": "GPU support",
+     "d": "The NVIDIA device plugin (or GPU Operator) with a nodeSelector for the GPU node only, and DCGM exporter for GPU metrics.",
+     "ok": "A pod requesting `nvidia.com/gpu` lands on the GPU node.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "With the GPU up, the test pod runs `nvidia-smi`, and its logs show a T4 or A10G.",
+      "Add GPU panels and a \"GPU on for more than 2 hours\" alert to the dashboards and alerts from a6-3 and a6-4."
+     ],
+     "learn": true,
+     "prompt": "Add the NVIDIA device plugin (or the GPU Operator with driver installation disabled, since the AMI ships drivers) and dcgm-exporter as ArgoCD applications, scheduled only on nodes labeled gpu=true with the matching toleration. Add a test pod that requests one GPU and runs nvidia-smi. Explain what each component does."
+    },
+    {
+     "id": "b5-2",
+     "t": "vLLM on the GPU node",
+     "d": "A Deployment with GPU tolerations and a 7–8B AWQ-quantized model that fits the T4's 16GB. Weights come from S3 in an init container instead of from Hugging Face on every boot. Readiness probe on `/health` and Prometheus metrics.",
+     "ok": "An OpenAI-compatible endpoint answers inside the cluster.",
+     "where": [
+      "chat",
+      "wsl",
+      "cc"
+     ],
+     "steps": [
+      "Pick the model in chat: a 7–8B instruct model with good tool calling and an AWQ version.",
+      "Download once from WSL and upload to S3: `huggingface-cli download <repo> --local-dir ./m`, then `aws s3 sync ./m s3://<bucket>/models/<name>`.",
+      "The T4 has no bf16 support, so you need `--dtype half`. Ask Claude to explain every flag."
+     ],
+     "learn": true,
+     "prompt": "Deploy vLLM in namespace llm on the GPU node: OpenAI-compatible server for <model> AWQ with --dtype half because the T4 has no bf16, a max model length that fits 16GB, tool-call parsing for this model family, an init container that syncs weights from s3://<data-bucket>/models/<model>, readiness on /health, and the metrics port exposed. Explain every flag you chose and what to tune first if it runs out of memory."
+    },
+    {
+     "id": "b5-3",
+     "t": "Routing with fallback",
+     "d": "The logical model `agent-model` goes to vLLM when it is up and falls back to the API model when it is not.",
+     "ok": "Turning the GPU off mid-run doesn't break the run.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Test: run the agent, scale the ASG to 0 midway, and see in Langfuse that calls moved to the API."
+     ],
+     "prompt": "Configure LiteLLM so agent-model tries vLLM first with a short timeout and falls back to agent-model-api. Add a test that calls agent-model while vLLM is down and asserts it succeeds through the fallback."
+    },
+    {
+     "id": "b5-4",
+     "t": "Automatic GPU window",
+     "d": "A CronJob that runs while the environment is up: it scales the ASG to 1, waits for vLLM, runs the agent as a Job, and scales back to 0 at the end, even when the run fails. The IAM permission covers this ASG only.",
+     "ok": "A full run with no manual steps, with the GPU on only during it.",
+     "where": [
+      "cc"
+     ],
+     "steps": [
+      "Test: trigger the CronJob by hand with `kubectl create job --from=cronjob/gpu-window test-1` and follow it."
+     ],
+     "learn": true,
+     "prompt": "Create a CronJob gpu-window in namespace agents: a small script that scales the GPU ASG to 1 with the AWS CLI, waits for the vllm Deployment to be Ready, creates the agent Job from a template and waits for it, and always scales back to 0 in a trap. In Terraform, grant autoscaling:SetDesiredCapacity on that ASG only to the k3s server role."
+    },
+    {
+     "id": "b5-5",
+     "t": "Benchmark and ADR",
+     "d": "Measure TTFT, tokens per second, cost per run and quality from the evals, for the T4 versus the API. Optional: g5.xlarge with an A10G.",
+     "ok": "An ADR with a table of real numbers. This is the strongest part of the portfolio.",
+     "where": [
+      "cc",
+      "chat"
+     ],
+     "steps": [
+      "Draft the ADR in chat from the table: when self-hosting pays off and when it doesn't."
+     ],
+     "learn": true,
+     "prompt": "Write scripts/benchmark.py: send the same set of agent-shaped prompts to a given model through LiteLLM and report TTFT p50 and p95, output tokens per second, cost from LiteLLM spend logs, and the pass rate on the evals subset. Print a markdown table I can paste into an ADR."
+    }
+   ]
+  },
+  {
+   "n": "C1",
+   "part": "Part C: portfolio and beyond",
+   "title": "Portfolio",
+   "goal": "Turn the work into a story a hiring manager gets in five minutes.",
+   "tasks": [
+    {
+     "id": "c1-1",
+     "t": "README and ADRs",
+     "d": "Architecture diagram, how to run it, and ADRs: k3s vs EKS, vLLM vs API, Langfuse Cloud vs self-hosting, no NAT, and an environment destroyed every night.",
+     "ok": "A stranger understands the system in five minutes.",
+     "where": [
+      "chat",
+      "cloud"
+     ],
+     "steps": [
+      "Write ADRs along the way, not at the end. At the end you only tidy up."
+     ],
+     "prompt": "Rewrite README.md for a hiring manager: a one-paragraph summary, a Mermaid architecture diagram, how a daily run flows, monthly cost with the real numbers from docs/costs.md, links to every ADR, and what I would build next. Keep it under two screens."
+    },
+    {
+     "id": "c1-2",
+     "t": "Real cost report",
+     "d": "Monthly cost from Cost Explorer by tag for Part B, the API cost from Part A, and the benchmark numbers side by side.",
+     "ok": "A table for the first month in the README.",
+     "where": [
+      "console"
+     ],
+     "steps": [
+      "Cost Explorer → Group by tag → project, split by layer. Copy the numbers into `docs/costs.md`."
+     ]
+    },
+    {
+     "id": "c1-3",
+     "t": "Post and video",
+     "d": "A technical post on LinkedIn or a blog, and a two-minute video of an end-to-end run.",
+     "ok": "Published.",
+     "where": [
+      "chat"
+     ],
+     "steps": [
+      "Draft the post in chat around the numbers: monthly cost, RTO and benchmark results."
+     ]
+    },
+    {
+     "id": "c1-4",
+     "t": "Pre-launch audit",
+     "d": "The repo is public from day one. Before you send its link to recruiters, check that it reads well and leaks nothing: secrets in history, personal data, Actions logs and internal URLs.",
+     "ok": "You are comfortable sending the repo link to a hiring manager.",
+     "where": [
+      "cc",
+      "gh"
+     ],
+     "steps": [
+      "Scan the full history with `gitleaks detect` and confirm no personal data (profile, company list, raw emails) was ever committed.",
+      "Skim the logs of recent Actions runs: on a public repo anyone can read them."
+     ],
+     "prompt": "Audit this public repo before I share it with recruiters: secrets anywhere in git history (gitleaks over all commits), personal data (profile, company list, raw emails, feedback labels), internal URLs, and anything sensitive printed in Actions logs. Then review the README and docs as a hiring manager would and list what to fix first."
+    }
+   ]
+  },
+  {
+   "n": "C2",
+   "part": "Part C: portfolio and beyond",
+   "title": "Phase 2: when the budget allows",
+   "goal": "Upgrades that add fixed cost. Only worth it once Part B is stable.",
+   "tasks": [
+    {
+     "id": "c2-1",
+     "t": "EKS with Karpenter",
+     "d": "A GPU NodePool with scale from zero, replacing the CronJob that manages the ASG.",
+     "ok": "A pod requesting a GPU brings up a node by itself.",
+     "where": [
+      "chat"
+     ],
+     "steps": [
+      "Plan it in chat first, and write an ADR that supersedes the k3s one."
+     ],
+     "cost": "~$73 + nodes"
+    },
+    {
+     "id": "c2-2",
+     "t": "Inference autoscaling",
+     "d": "KServe or the vLLM production stack with autoscaling on queue length.",
+     "ok": "Load adds replicas, which scale back to 0.",
+     "where": [
+      "chat"
+     ],
+     "steps": [
+      "Only relevant after EKS."
+     ]
+    },
+    {
+     "id": "c2-3",
+     "t": "Self-hosted Langfuse, ingress and staging",
+     "d": "Self-hosted Langfuse, public ingress with an ALB and authentication, and a separate staging environment with controlled promotion.",
+     "ok": "Changes go through staging before production.",
+     "where": [
+      "chat"
+     ],
+     "steps": [
+      "Each of these adds fixed cost, so prioritize by what the portfolio lacks most."
+     ]
+    }
+   ],
+   "later": true
+  }
+ ]
+}

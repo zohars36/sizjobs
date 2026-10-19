@@ -1,0 +1,323 @@
+<title>SizJobs תיאור מוצר</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;600;700&family=Rubik:wght@500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one RTL reading column, same identity as the SizJobs plan page; tables and one flow diagram carry the structure */
+:root {
+  --bg: #f5f7f8;
+  --surface: #ffffff;
+  --fg: #1b2328;
+  --muted: #56636b;
+  --line: #dde3e6;
+  --accent: #17657e;
+  --accent-soft: #e2eff3;
+  --rec: #8a5a00;
+  --rec-soft: #fbf0d9;
+  --edge: #8a979e;
+  --font-display: "Rubik", "Assistant", Arial, sans-serif;
+  --font-body: "Assistant", "Rubik", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12181b; --surface: #1a2226; --fg: #e6ecee; --muted: #9aa8af; --line: #2b363b;
+    --accent: #6cc0d9; --accent-soft: #1d3540; --rec: #f0c062; --rec-soft: #3a2e14; --edge: #6d7b82;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12181b; --surface: #1a2226; --fg: #e6ecee; --muted: #9aa8af; --line: #2b363b;
+  --accent: #6cc0d9; --accent-soft: #1d3540; --rec: #f0c062; --rec-soft: #3a2e14; --edge: #6d7b82;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font-body); font-size: 18px; line-height: 1.8;
+  direction: rtl; text-align: right;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 36px 64px;
+}
+main { max-width: 800px; margin: 0 auto; display: flex; flex-direction: column; gap: 44px; }
+h1, h2 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.3; }
+h1 { font-size: clamp(30px, 6vw, 42px); font-weight: 700; }
+h2 { font-size: 25px; font-weight: 700; padding-bottom: 8px; border-bottom: 2px solid var(--line); }
+p { margin: 0; max-width: 68ch; }
+header { display: flex; flex-direction: column; gap: 12px; }
+.eyebrow { font-family: var(--font-mono); font-size: 13px; letter-spacing: .06em; color: var(--accent); }
+.lede { font-size: 20px; color: var(--muted); }
+.meta { font-size: 15px; color: var(--muted); }
+.meta a, a { color: var(--accent); font-weight: 600; }
+code { font-family: var(--font-mono); font-size: .84em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; unicode-bidi: isolate; direction: ltr; }
+section { display: flex; flex-direction: column; gap: 16px; }
+ul, ol { margin: 0; padding-right: 22px; padding-left: 0; display: flex; flex-direction: column; gap: 8px; }
+li::marker { color: var(--accent); font-weight: 700; }
+b { font-weight: 700; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { width: 100%; border-collapse: collapse; font-size: 16.5px; line-height: 1.6; }
+th, td { padding: 10px 14px; text-align: right; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+th { font-family: var(--font-display); font-weight: 500; font-size: 14px; color: var(--muted); background: var(--bg); }
+td:first-child { font-weight: 600; white-space: nowrap; }
+.ver { font-family: var(--font-mono); font-size: 14px; color: var(--accent); }
+.tid { font-family: var(--font-mono); font-size: 14px; color: var(--accent); white-space: nowrap; }
+.chip { display: inline-block; font-size: 13px; font-weight: 700; padding: 0 9px; border-radius: 999px; white-space: nowrap; }
+.chip.yours { color: var(--accent); background: var(--accent-soft); }
+.chip.default { color: var(--rec); background: var(--rec-soft); }
+.note { background: var(--rec-soft); border-radius: 10px; padding: 14px 18px; }
+.note b { color: var(--rec); }
+.diagram { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow-x: auto; }
+.diagram svg { display: block; width: 100%; min-width: 560px; height: auto; direction: rtl; }
+.d-box { fill: none; stroke: var(--edge); stroke-width: 1.25; }
+.d-llm { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
+.d-agent { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 5 4; }
+.d-edge { fill: none; stroke: var(--edge); stroke-width: 1.25; }
+.d-head { fill: var(--edge); }
+.d-title { fill: var(--fg); font-family: var(--font-display); font-size: 16px; font-weight: 700; }
+.d-name { fill: var(--fg); font-family: var(--font-body); font-size: 15px; font-weight: 700; text-anchor: middle; }
+.d-sub { fill: var(--muted); font-family: var(--font-body); font-size: 13px; text-anchor: middle; }
+.d-key { fill: var(--muted); font-family: var(--font-body); font-size: 13px; }
+@media (max-width: 620px) {
+  body { font-size: 17px; }
+  td:first-child { white-space: normal; }
+}
+</style>
+
+<main>
+  <header>
+    <div class="eyebrow">SizJobs · Product</div>
+    <h1>SizJobs: תיאור מוצר</h1>
+    <p class="lede">SizJobs הוא סוכן אישי שמוצא כל בוקר את המשרות בישראל שבאמת מתאימות למעבר שלך מ-DevOps ל-AI, מסביר למה כל אחת מתאימה ומה חסר לך בה, ולומד מהפידבק שלך.</p>
+    <p class="meta">עודכן ב-18 באוקטובר 2026 · <a href="../plan/" target="_blank" rel="noopener">תוכנית המשימות</a></p>
+  </header>
+
+  <section>
+    <h2>תקציר</h2>
+    <p>המוצר מחליף גלילה יומית בלוחות משרות בהודעה אחת שקוראים בחמש דקות. יש לו שני תפקידים, ושניהם נמדדים:</p>
+    <ul>
+      <li><b>כלי אמיתי:</b> להביא אותך לראיונות לתפקידי AI Infrastructure, AI Platform ו-LLMOps מהר יותר.</li>
+      <li><b>פורטפוליו:</b> מערכת AI בפרודקשן שבנית מקצה לקצה ויודע להסביר, עם מספרים אמיתיים על עלות, איכות ואמינות.</li>
+    </ul>
+    <p>הסדר חשוב: קודם מוצר שאתה באמת משתמש בו כל בוקר. מערכת שאף אחד לא משתמש בה היא פורטפוליו חלש, כי אין לה פידבק אמיתי לספר עליו.</p>
+  </section>
+
+  <section>
+    <h2>הבעיה</h2>
+    <p>חיפוש לפי מילות מפתח מפספס בדיוק את המשרות שמעניינות מישהו שעובר מ-DevOps ל-AI. שלושה דברים גורמים לזה:</p>
+    <ul>
+      <li><b>השמות לא קבועים.</b> אותו תפקיד מופיע כ-MLOps, AI Infrastructure, ML Platform, LLMOps או סתם Platform Engineer עם GPUs בתיאור. חיפוש של כותרת אחת מפספס את השאר.</li>
+      <li><b>הרלוונטיות נמצאת בתוך התיאור.</b> משרת DevOps שבונה פלטפורמת inference מתאימה לך יותר ממשרת ML Engineer שכולה אימון מודלים. רק קריאה של הטקסט מגלה את זה.</li>
+      <li><b>המשרות מפוזרות וכפולות.</b> אותה משרה מופיעה בכמה מקומות, וחלק מהמשרות הטובות קיימות רק בדף הקריירה של החברה.</li>
+    </ul>
+    <p>מודל שפה פותר בדיוק את זה: הוא קורא את התיאור המלא, משווה לפרופיל שלך, ומסביר את ההתאמה במילים.</p>
+  </section>
+
+  <section>
+    <h2>המשתמש והפרופיל</h2>
+    <p>משתמש אחד בשלב הזה: אתה. הסוכן שופט כל משרה מול קובץ פרופיל אחד, ולכן איכות ההמלצות תלויה קודם כל במה שכתוב בו.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>שדה</th><th>מה נכנס</th><th>ערך התחלתי</th></tr></thead>
+        <tbody>
+          <tr><td>תפקידי יעד</td><td>שמות ותיאורים של העבודה עצמה</td><td>AI Infrastructure, MLOps, LLMOps, AI/ML Platform, ו-DevOps או Platform עם עבודת GPU או LLM</td></tr>
+          <tr><td>חובה</td><td>מה חייב להיות במשרה</td><td>בכירות Senior ומעלה, Kubernetes, ענן ציבורי</td></tr>
+          <tr><td>יתרון</td><td>מעלה את הציון</td><td>GPUs, inference serving, כלי LLM, סוכנים</td></tr>
+          <tr><td>פוסל</td><td>מוריד מיד</td><td>Data Scientist, מחקר טהור, דרישת PhD, תפקידי Junior</td></tr>
+          <tr><td>מיקום</td><td>איפה</td><td>ישראל בלבד, כל צורת עבודה</td></tr>
+          <tr><td>כישורים שלך</td><td>לניתוח פערים</td><td>הסטאק הנוכחי שלך ומה שאתה לומד</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><b>פרטיות:</b> ה-repo ציבורי, אז הפרופיל האמיתי שלך לא נכנס אליו. ב-repo יש קובץ דוגמה בלבד, והפרופיל שלך נשמר ב-bucket פרטי: MinIO בשלב המקומי, ו-S3 אחרי המעבר ל-AWS. אותו כלל חל על רשימת החברות.</p>
+  </section>
+
+  <section>
+    <h2>חוויית המשתמש היומית</h2>
+    <p>המוצר כולו הוא הודעת טלגרם אחת בבוקר והתגובות שלך עליה. אין אתר ואין דשבורד למשתמש בשלב הזה. כל הממשק באנגלית: ה-digest, הכפתורים והפקודות לבוט.</p>
+    <ol>
+      <li><b>בוקר:</b> מגיעה הודעת סיכום עם עד 10 משרות חדשות, מציון 60 ומעלה, מהגבוה לנמוך. משרות מתחת לסף לא מופיעות, אבל נספרות.</li>
+      <li><b>כרטיס לכל משרה:</b> תפקיד וחברה, מיקום וצורת עבודה, ציון התאמה, שורה אחת של למה זה מתאים, שורה אחת של מה חסר לך, וקישור למשרה המקורית.</li>
+      <li><b>פידבק בלחיצה:</b> הכפתורים Relevant, Not relevant ו-Save. הכפתור Not relevant מבקש סיבה קצרה מתוך רשימה.</li>
+      <li><b>מעקב:</b> משרה שמורה עוברת בין השלבים הוגש, ראיון ותשובה, בפקודה קצרה לבוט.</li>
+      <li><b>שבועי:</b> סיכום של מצב החיפוש ושל הכישורים שחוזרים הכי הרבה במשרות שמתאימות לך וחסרים לך.</li>
+    </ol>
+    <p>הפידבק הוא הלב של המוצר. כל לחיצה היא תיוג שנכנס ל-golden dataset, כך שה-evals גדלים מהשימוש עצמו ולא מעבודת תיוג נפרדת.</p>
+  </section>
+
+  <section>
+    <h2>יכולות לפי גרסאות</h2>
+    <p>ה-MVP הוא digest יומי מדורג עם פידבק. כל השאר מגיע רק אחרי שהוא עובד ויש evals.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>יכולת</th><th>גרסה</th><th>מה בדיוק</th></tr></thead>
+        <tbody>
+          <tr><td>רשימת חברות</td><td class="ver">MVP</td><td>רשימת חברות יעד שאתה מרכיב מ-LinkedIn. לכל חברה, משרות בישראל מה-API של מערכת הגיוס שלה או מדף הקריירה</td></tr>
+          <tr><td>התראות LinkedIn</td><td class="ver">MVP</td><td>התראות המשרות ש-LinkedIn שולח למייל נקראות מתיבת הדואר ומפורקות למשרות בודדות</td></tr>
+          <tr><td>נרמול וכפילויות</td><td class="ver">MVP</td><td>פורמט אחד לכל המקורות, ואותה משרה משני מקורות מופיעה פעם אחת</td></tr>
+          <tr><td>סיווג וחילוץ</td><td class="ver">MVP</td><td>ציון התאמה מול הפרופיל, וחילוץ תפקיד, בכירות, מיקום, צורת עבודה וסטאק</td></tr>
+          <tr><td>הסבר</td><td class="ver">MVP</td><td>למה מתאים ומה חסר, שורה לכל אחד</td></tr>
+          <tr><td>Digest ופידבק</td><td class="ver">MVP</td><td>טלגרם בבוקר, שלושה כפתורים לכל משרה</td></tr>
+          <tr><td>מקור Microsoft</td><td class="ver">v0.2</td><td>משרות בישראל מאתר הקריירה של Microsoft, דרך Hermes והדפדפן. זה המקור האגנטי הראשון</td></tr>
+          <tr><td>מעקב מועמדויות</td><td class="ver">v0.2</td><td>שמור, הוגש, ראיון, תשובה, דרך פקודות לבוט</td></tr>
+          <tr><td>פערי כישורים</td><td class="ver">v0.2</td><td>אילו כישורים חוזרים במשרות שמתאימות לך וחסרים לך, כקלט לתוכנית הלימוד</td></tr>
+          <tr><td>ניתוח על בקשה</td><td class="ver">v0.2</td><td>שולחים לבוט טקסט של משרה שמצאת בעצמך ומקבלים כרטיס התאמה</td></tr>
+          <tr><td>טיוטות להגשה</td><td class="ver">v0.3</td><td>נקודות CV ומכתב פנייה מותאמים למשרה. אתה שולח, לא הסוכן</td></tr>
+          <tr><td>מחקר חברה</td><td class="ver">v0.3</td><td>סוכן שגולש לאתר החברה ומסכם מוצר, סטאק וחדשות לפני ראיון</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><b>מה לא בונים:</b></p>
+    <ul>
+      <li>הגשה אוטומטית למשרות או שליחת הודעות למגייסים.</li>
+      <li>אוטומציה על האתר של LinkedIn.</li>
+      <li>מוצר לכמה משתמשים או ממשק web בשלב הזה.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>איך המערכת עובדת</h2>
+    <p>רוב המערכת היא pipeline רגיל, ורק שני שלבים בה משתמשים במודל שפה. משיכת משרות וזיהוי כפילויות הם קוד רגיל: מהיר, זול וקל לבדוק. מודל השפה נכנס רק במקום שצריך שיפוט, ו-Hermes עם הדפדפן רק במקום שאין API.</p>
+    <div class="diagram" role="img" aria-label="מודל שפה נכנס רק בשניים מחמשת השלבים">
+      <svg viewBox="0 0 760 324" xmlns="http://www.w3.org/2000/svg">
+        <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="d-head" d="M0 0L10 5L0 10z"/></marker></defs>
+        <text class="d-title" x="736" y="34" text-anchor="start">מודל שפה נכנס רק בשניים מחמשת השלבים</text>
+        <g>
+          <path class="d-edge" d="M606 104H592" marker-end="url(#arr)"/>
+          <path class="d-edge" d="M460 104H446" marker-end="url(#arr)"/>
+          <path class="d-edge" d="M314 104H300" marker-end="url(#arr)"/>
+          <path class="d-edge" d="M168 104H154" marker-end="url(#arr)"/>
+          <path class="d-edge" d="M88 132V196" marker-end="url(#arr)"/>
+          <path class="d-edge" d="M154 224H168" marker-end="url(#arr)"/>
+          <path class="d-edge" d="M300 224H314" marker-end="url(#arr)"/>
+          <path class="d-edge" d="M380 196V132" marker-end="url(#arr)"/>
+          <path class="d-edge" d="M606 224H526V132" marker-end="url(#arr)"/>
+        </g>
+        <rect class="d-box" x="606" y="76" width="132" height="56" rx="8"/>
+        <text class="d-name" x="672" y="100">איסוף</text><text class="d-sub" x="672" y="120">API, קריירה, מייל</text>
+        <rect class="d-box" x="460" y="76" width="132" height="56" rx="8"/>
+        <text class="d-name" x="526" y="100">נרמול</text><text class="d-sub" x="526" y="120">איחוד וכפילויות</text>
+        <rect class="d-llm" x="314" y="76" width="132" height="56" rx="8"/>
+        <text class="d-name" x="380" y="100">סיווג וחילוץ</text><text class="d-sub" x="380" y="120">LLM דרך gateway</text>
+        <rect class="d-llm" x="168" y="76" width="132" height="56" rx="8"/>
+        <text class="d-name" x="234" y="100">הסבר התאמה</text><text class="d-sub" x="234" y="120">למה מתאים, מה חסר</text>
+        <rect class="d-box" x="22" y="76" width="132" height="56" rx="8"/>
+        <text class="d-name" x="88" y="100">Digest</text><text class="d-sub" x="88" y="120">טלגרם, כל בוקר</text>
+        <rect class="d-agent" x="606" y="196" width="132" height="56" rx="8"/>
+        <text class="d-name" x="672" y="220">Hermes</text><text class="d-sub" x="672" y="240">אתרים בלי API</text>
+        <rect class="d-box" x="22" y="196" width="132" height="56" rx="8"/>
+        <text class="d-name" x="88" y="220">פידבק</text><text class="d-sub" x="88" y="240">מתאים או לא</text>
+        <rect class="d-box" x="168" y="196" width="132" height="56" rx="8"/>
+        <text class="d-name" x="234" y="220">Golden dataset</text><text class="d-sub" x="234" y="240">גדל מכל לחיצה</text>
+        <rect class="d-box" x="314" y="196" width="132" height="56" rx="8"/>
+        <text class="d-name" x="380" y="220">Evals ב-CI</text><text class="d-sub" x="380" y="240">חוסמות prompt גרוע</text>
+        <text class="d-sub" x="414" y="168">gate</text>
+        <rect class="d-llm" x="716" y="284" width="16" height="12" rx="3"/>
+        <text class="d-key" x="706" y="294" text-anchor="start">שלב עם LLM</text>
+        <rect class="d-agent" x="584" y="284" width="16" height="12" rx="3"/>
+        <text class="d-key" x="574" y="294" text-anchor="start">סוכן עם דפדפן, רק בלי API</text>
+      </svg>
+    </div>
+    <p>הפידבק סוגר לולאה: כל לחיצה מוסיפה תיוג ל-golden dataset, וה-evals חוסמים שינוי בשלב הסיווג שמוריד איכות.</p>
+    <p>החלוקה הזו היא החלטת הארכיטקטורה החשובה במוצר, והיא שווה ADR משלה. סוכן שעושה הכל בעצמו יקר יותר, איטי יותר וקשה יותר למדוד. בראיון, היכולת להסביר מתי לא צריך סוכן מרשימה יותר מהסוכן עצמו.</p>
+    <p><b>מודל הנתונים</b>, טבלאות ב-Postgres:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>טבלה</th><th>מה נשמר</th><th>מי כותב</th></tr></thead>
+        <tbody>
+          <tr><td><code>sources</code></td><td>מקור, סוג הגישה, חברות מעקב</td><td>אתה, בתצורה</td></tr>
+          <tr><td><code>jobs</code></td><td>משרה מנורמלת, טקסט מקורי, fingerprint לכפילויות</td><td>שלב האיסוף</td></tr>
+          <tr><td><code>assessments</code></td><td>ציון, שדות שחולצו, הסבר, מודל וגרסת prompt</td><td>שלב הסיווג</td></tr>
+          <tr><td><code>feedback</code></td><td>Relevant, Not relevant או Save, וסיבה</td><td>אתה, דרך הבוט</td></tr>
+          <tr><td><code>applications</code></td><td>סטטוס מועמדות ותאריכים</td><td>אתה, מ-v0.2</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>שמירת גרסת ה-prompt והמודל על כל ציון מאפשרת להשוות לאורך זמן איזו גרסה קיבלה יותר פידבק חיובי.</p>
+  </section>
+
+  <section>
+    <h2>מדדי הצלחה</h2>
+    <p>המדד הראשי הוא אחוז המשרות ב-digest שסימנת כ-Relevant. היעדים כאן הם נקודת פתיחה, ומכיילים אותם אחרי שבועיים של שימוש.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>מדד</th><th>יעד התחלתי</th><th>איך מודדים</th></tr></thead>
+        <tbody>
+          <tr><td>דיוק ה-digest</td><td>70% מהמשרות מסומנות Relevant</td><td>טבלת feedback, לפי שבוע</td></tr>
+          <tr><td>משרות שפוספסו</td><td>פחות מאחת בשבוע</td><td>משרה מתאימה שמצאת בעצמך נשלחת לבוט ונספרת</td></tr>
+          <tr><td>זמן מיון יומי</td><td>פחות מ-5 דקות</td><td>הערכה שלך</td></tr>
+          <tr><td>ראיונות</td><td>מספר ראיונות ממשרות שהסוכן מצא</td><td>טבלת applications</td></tr>
+          <tr><td>ציון evals</td><td>מעל הסף ב-thresholds.yaml</td><td>CI על כל PR</td></tr>
+          <tr><td>עלות חודשית</td><td>עד $5 בחלק א', עד $23 בחלק ב'</td><td>LiteLLM, ו-Cost Explorer לפי tag</td></tr>
+          <tr><td>עלות לריצה</td><td>נמדד, בלי יעד עדיין</td><td>LiteLLM ו-Langfuse</td></tr>
+          <tr><td>זמן הקמה</td><td>עד 15 דקות, בחלק ב'</td><td>מטריקה מ-env-up</td></tr>
+          <tr><td>ריצות שהצליחו</td><td>95% מהימים שהמחשב או הסביבה דלקו</td><td>Grafana</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>ארבע השורות הראשונות מודדות את המוצר, השאר את הפלטפורמה. בראיון צריך מספרים משתי הקבוצות.</p>
+  </section>
+
+  <section>
+    <h2>כללים</h2>
+    <p>הסוכן קורא וממליץ, ואתה מחליט ופועל. הכללים האלה נאכפים בקוד ובתשתית, לא רק ב-prompt:</p>
+    <ul>
+      <li><b>מקורות:</b> רק API ציבוריים, דפי קריירה של חברות והתראות המשרות מהמייל. הסוכן מכבד robots.txt וקצב בקשות סביר, ולא מתחבר לשום אתר עם החשבון שלך. בתיבת המייל הוא קורא רק את התווית של התראות המשרות, ולא שולח, מוחק או מסמן הודעות.</li>
+      <li><b>בלי פעולות בשמך:</b> אין לסוכן כלי שמגיש, שולח הודעה או ממלא טופס. ההודעה היחידה שהוא שולח היא ה-digest אליך.</li>
+      <li><b>קלט לא אמין:</b> טקסט של משרה הוא נתון ולא הוראה. משרה שמנסה להורות לסוכן משהו מסומנת ומסווגת רגיל.</li>
+      <li><b>פרטיות:</b> הפרופיל שלך ורשימת החברות מחוץ ל-repo. לא נשמרים פרטים אישיים של מגייסים או עובדים שמופיעים במשרות.</li>
+      <li><b>עלות:</b> לכל ריצה יש תקרת טוקנים ב-LiteLLM. ריצה שחורגת נעצרת ומדווחת, במקום להמשיך לשלם.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>קשר לתוכנית המשימות</h2>
+    <p>כל יכולת של ה-MVP ממומשת במשימה בתוכנית. ה-MVP כולו נבנה בחלק א', על המחשב המקומי ב-WSL, ומשימות המוצר עצמן נמצאות בשלב A5.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>יכולת</th><th>משימות</th></tr></thead>
+        <tbody>
+          <tr><td>פרופיל פרטי</td><td><span class="tid">a5-1</span></td></tr>
+          <tr><td>התראות LinkedIn מהמייל</td><td><span class="tid">a5-2</span></td></tr>
+          <tr><td>רשימת חברות ומערכות גיוס</td><td><span class="tid">a5-3</span></td></tr>
+          <tr><td>נרמול וכפילויות</td><td><span class="tid">a5-4</span>, <span class="tid">a4-2</span></td></tr>
+          <tr><td>סיווג, חילוץ והסבר</td><td><span class="tid">a5-5</span>, ונמדד ב-<span class="tid">a7-2</span></td></tr>
+          <tr><td>Digest ופידבק</td><td><span class="tid">a4-5</span>, <span class="tid">a5-6</span></td></tr>
+          <tr><td>פידבק ל-evals</td><td><span class="tid">a5-7</span></td></tr>
+          <tr><td>הגנה מ-prompt injection</td><td><span class="tid">a4-3</span>, <span class="tid">a7-4</span></td></tr>
+          <tr><td>מקור Microsoft</td><td><span class="tid">a5-8</span></td></tr>
+          <tr><td>ריצה יומית</td><td><span class="tid">a4-6</span> מהמחשב, ובחלק ב' <span class="tid">b3-8</span> מ-AWS</td></tr>
+          <tr><td>מדדי מוצר</td><td><span class="tid">a6-3</span>, כולל דיוק ה-digest</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>החלטות</h2>
+    <p>כל ההחלטות לשלב הראשון התקבלו ב-18 באוקטובר 2026. שורות שמסומנות כברירת מחדל הן נקודת התחלה, ומכיילים אותן אחרי שבועיים של שימוש.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>נושא</th><th>החלטה</th><th>מקור</th></tr></thead>
+        <tbody>
+          <tr><td>שם המוצר</td><td>SizJobs</td><td><span class="chip yours">שלך</span></td></tr>
+          <tr><td>מיקום</td><td>משרות בישראל בלבד, כל צורת עבודה</td><td><span class="chip yours">שלך</span></td></tr>
+          <tr><td>שפת הממשק</td><td>אנגלית</td><td><span class="chip yours">שלך</span></td></tr>
+          <tr><td>שכר</td><td>לא נכלל בשלב זה</td><td><span class="chip yours">שלך</span></td></tr>
+          <tr><td>מקור: LinkedIn</td><td>התראות המשרות שמגיעות למייל, נקראות מתיבת הדואר</td><td><span class="chip yours">שלך</span></td></tr>
+          <tr><td>מקור: Microsoft</td><td>אתר הקריירה, ב-v0.2</td><td><span class="chip yours">שלך</span></td></tr>
+          <tr><td>מקור: חברות</td><td>קובץ <code>companies.yaml</code> שאתה ממלא מ-LinkedIn, מתחילים מ-20 עד 30 חברות</td><td><span class="chip default">ברירת מחדל</span></td></tr>
+          <tr><td>תפקידי יעד</td><td>AI Infrastructure, MLOps, LLMOps, AI/ML Platform, ו-DevOps או Platform עם עבודת GPU או LLM</td><td><span class="chip default">ברירת מחדל</span></td></tr>
+          <tr><td>חובה</td><td>בכירות Senior ומעלה, Kubernetes, ענן ציבורי</td><td><span class="chip default">ברירת מחדל</span></td></tr>
+          <tr><td>יתרון</td><td>GPUs, inference serving, כלי LLM, סוכנים</td><td><span class="chip default">ברירת מחדל</span></td></tr>
+          <tr><td>פוסל</td><td>Data Scientist, מחקר טהור, דרישת PhD, תפקידי Junior</td><td><span class="chip default">ברירת מחדל</span></td></tr>
+          <tr><td>גודל ה-digest</td><td>עד 10 משרות, ציון 60 ומעלה מתוך 100</td><td><span class="chip default">ברירת מחדל</span></td></tr>
+          <tr><td>גישה למייל</td><td>IMAP עם App Password, תווית ייעודית בלבד</td><td><span class="chip default">ברירת מחדל</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note"><b>למה IMAP ולא Gmail API:</b> לאפליקציית OAuth של Google במצב Testing, ה-refresh token פג אחרי 7 ימים, והריצה היומית הייתה נשברת כל שבוע. App Password דורש אימות דו-שלבי בחשבון. אם Google יגביל את זה, עוברים ל-Gmail API.</p>
+  </section>
+</main>
