@@ -12,12 +12,17 @@ on:
 
 jobs:
   claude:
+    # Start a runner only when @claude is mentioned.
+    # The action also rejects anyone without write access to the repo.
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Read-only on purpose: Claude writes through the Claude GitHub App token,
+    # obtained with id-token, not through this workflow's GITHUB_TOKEN.
     permissions:
       contents: read
       pull-requests: read
@@ -36,15 +41,13 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
-          # This is an optional setting that allows Claude to read CI results on PRs
+          # Cap each run so a stuck task can't burn the subscription quota
+          claude_args: "--max-turns 15"
+
+          # Lets Claude read CI results on PRs
           additional_permissions: |
             actions: read
 
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
-
-          # Optional: Add claude_args to customize behavior and configuration
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
-          # claude_args: '--allowed-tools Bash(gh pr *)'
-
+          # Optional custom prompt; without it Claude follows the @claude comment
+          # prompt: '...'
+          # Options: https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
