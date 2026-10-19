@@ -1,0 +1,50 @@
+# Fails if any tracked file matches a .gitignore pattern.
+#
+# .gitignore only stops `git add` from picking up new files; `git add -f`
+# bypasses it, and a file committed before a pattern existed stays tracked.
+# This job catches both. The patterns live only in .gitignore, so there
+# is one list to maintain. To allow a file on purpose, add a `!` exception
+# to .gitignore in the same PR.
+#
+# Only file paths are printed, never contents.
+name: tracked-files
+
+on:
+  # pull_request (not pull_request_target): runs with the PR's own code and
+  # a read-only token, so forks cannot reach secrets.
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege for GITHUB_TOKEN: this job only reads the repo.
+permissions:
+  contents: read
+
+jobs:
+  no-ignored-files-tracked:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Pinned to a full commit SHA, not a tag: tags can be moved, so a
+      # compromised action could otherwise change under us.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Do not leave the token in .git/config for later steps.
+          persist-credentials: false
+
+      - name: Check for tracked files matching .gitignore
+        run: |
+          # --cached   look at tracked files (the index), not the working tree
+          # --ignored  keep only the ones an ignore pattern matches
+          # --exclude-standard  use .gitignore files (all levels) and
+          #            .git/info/exclude; the runner has no global excludes
+          matches="$(git ls-files --cached --ignored --exclude-standard)"
+          if [ -n "$matches" ]; then
+            echo "::error::Tracked files match .gitignore patterns (forced add?):"
+            echo "$matches"
+            echo
+            echo "Remove them with 'git rm --cached <path>' and, if they held a"
+            echo "secret, rotate it: it is already in the git history."
+            exit 1
+          fi
+          echo "No tracked files match .gitignore."

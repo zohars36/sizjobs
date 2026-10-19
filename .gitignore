@@ -2,41 +2,110 @@
 # sizjobs .gitignore
 # This repo is public. .gitignore prevents accidents; gitleaks
 # (pre-commit and CI) and GitHub push protection catch the rest.
+#
+# CI (.github/workflows/tracked-files.yml) fails if any tracked file
+# matches a pattern here, so `git add -f` cannot sneak one in.
+# A file that really must be committed needs a `!` exception here,
+# reviewed in a PR, not a forced add.
+#
+# Pattern syntax reminder:
+#   foo      matches foo at any depth
+#   /foo     matches only at the repo root
+#   foo/     matches directories only
+#   !foo     re-includes something an earlier pattern excluded
+#            (does not work if a parent directory is excluded)
 # ---------------------------------------------------------------
 
-# Secrets and credentials: never committed
+# --- Secrets and credentials: never committed --------------------
+# Locally secrets live in ~/.config/sizjobs/.env, on AWS in SSM.
+# Any copy inside the repo is a mistake.
 .env
 .env.*
+*.env
 !.env.example
+# direnv, netrc and PyPI configs often hold tokens in plain text
+.envrc
+.netrc
+.pypirc
+# Private keys and keystores (cosign.key matches *.key; cosign.pub is fine)
 *.pem
 *.key
 *.p12
 *.pfx
 *.crt
+*.jks
+*.keystore
 id_rsa*
 id_ed25519*
-kubeconfig*
-*.kubeconfig
+# Root-level scratch folder for anything secret
+/secrets/
+# Cloud and cluster credentials
 .aws/
 credentials.json
 token.json
 
-# Personal data: lives in the private bucket (MinIO, later S3)
+# --- Kubernetes, k3d, Helm ----------------------------------------
+# kubeconfig contains client certs/tokens for the cluster.
+# k3d writes one with `k3d kubeconfig write`; never copy it here.
+kubeconfig*
+*.kubeconfig
+.kube/
+# Secret manifests generated locally, e.g.
+#   kubectl create secret generic x --from-env-file=... --dry-run=client -o yaml
+# hold base64 (not encrypted) values. Helm chart templates named
+# secret.yaml contain no values and are allowed back in.
+secret.yaml
+secrets.yaml
+*-secret.yaml
+*-secrets.yaml
+*.secret.yaml
+!**/templates/*secret*.yaml
+# `helm dependency build` downloads subcharts as tarballs; Chart.lock
+# is committed instead so the build is reproducible.
+**/charts/*.tgz
+
+# --- MinIO (local stand-in for S3) --------------------------------
+# Local data directory if MinIO runs with a host bind mount, and the
+# `mc` client config, which stores access and secret keys.
+/minio-data/
+.mc/
+
+# --- Personal data: lives in the private bucket (MinIO, later S3) --
 profile.yaml
 companies.yaml
 /private/
 # Raw email exports. Only sanitized fixtures under tests/fixtures/ are committed.
 /mail-raw/
+*.eml
+*.mbox
+*.msg
+!**/tests/fixtures/**/*.eml
+# CVs, cover letters and job ads are usually PDF/Word. Outside docs/
+# they are almost certainly personal.
+*.pdf
+*.doc
+*.docx
+!docs/**/*.pdf
+# Local agent state (memory, caches) can contain personal data
+*.db
+*.sqlite
+*.sqlite3
 
-# Terraform (.terraform.lock.hcl IS committed)
+# --- Terraform (.terraform.lock.hcl IS committed) -----------------
+# Provider plugins and module cache, re-downloaded by `terraform init`
 .terraform/
+# State holds every resource attribute, including secrets, in plain text.
+# Real state lives in the S3 backend.
 *.tfstate
 *.tfstate.*
-*.tfplan
-tfplan
 .terraform.tfstate.lock.info
+# Saved plans embed variable values (and so secrets)
+*.tfplan
+*.tfplan.json
+tfplan
 crash.log
 crash.*.log
+# Override files are for local experiments only
 override.tf
 override.tf.json
 *_override.tf
@@ -45,31 +114,45 @@ override.tf.json
 *.tfvars
 *.tfvars.json
 !*.tfvars.example
+# Terraform CLI config can contain API tokens
+.terraformrc
+terraform.rc
 
-# Python
+# --- Python (uv) ---------------------------------------------------
+# uv.lock and .python-version ARE committed: they pin the exact
+# dependency set and interpreter. Only the venv and caches are ignored.
 __pycache__/
 *.py[cod]
 .venv/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.hypothesis/
+.tox/
+.nox/
+.ipynb_checkpoints/
 .coverage
+.coverage.*
 coverage.xml
 htmlcov/
 dist/
 build/
 *.egg-info/
 
-# Evals output
+# --- Evals (promptfoo) ----------------------------------------------
+# Run results can include model output about the real profile.
 evals/output/
 .promptfoo/
+# promptfoo is an npm package; a local install creates node_modules
+node_modules/
 
-# Local runtime data at the repo root only (a code folder named models/ is fine)
+# --- Local runtime data at the repo root only (a code folder named models/ is fine)
 /models/
 /.local/
 *.log
 
-# Editors and OS
+# --- Editors and OS ---------------------------------------------------
+# Shared VS Code recommendations/settings are committed, the rest is personal
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
@@ -77,7 +160,14 @@ evals/output/
 *.swp
 .DS_Store
 Thumbs.db
+# Windows adds these alternate-stream files when copying into WSL
+*:Zone.Identifier
 
-# Claude Code: personal, machine-local settings
+# --- Claude Code ------------------------------------------------------
+# .claude/settings.json, .claude/commands/ and .mcp.json ARE committed.
+# .mcp.json must reference secrets as ${ENV_VAR}, never literal values.
+# Personal, machine-local settings and notes:
 .claude/settings.local.json
 CLAUDE.local.md
+# Git worktrees Claude Code creates for isolated sessions
+.claude/worktrees/
