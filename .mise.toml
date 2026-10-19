@@ -1,0 +1,51 @@
+# Tool versions for sizjobs, managed by mise (https://mise.jdx.dev).
+#
+# Every version is pinned exactly (never "latest") so a fresh laptop, CI
+# and the AWS bootstrap all run the same binaries. Renovate's mise manager
+# opens PRs to bump these.
+#
+# Setup: `mise trust && mise install` (see README "Local setup").
+# `mise trust` is required because mise refuses to read a config file it
+# has not seen before: a .mise.toml can define env vars and tasks, so a
+# cloned repo must be approved explicitly.
+#
+# Tool names come from `mise registry`. Most resolve to the aqua backend,
+# which downloads the upstream release binary and verifies its checksum.
+
+[tools]
+# Infrastructure as code for Part B (AWS). Only CI runs apply/destroy.
+terraform = "1.16.6"
+
+# Kubernetes CLI. kubectl supports one minor version of skew against the
+# API server, so it tracks the k3s version we run:
+#   k3s v1.36.5+k3s1 (k3d image locally, k3s on EC2 in Part B).
+# a2-1 pins the same k3s version; bump both together.
+# 1.36 rather than the newer 1.37: 1.37.x has had only one patch release.
+kubectl = "1.36.5"
+
+# Installs Helm charts by hand while debugging; ArgoCD renders them in-cluster.
+helm = "4.3.1"
+
+# Runs k3s inside Docker for the local cluster (Part A).
+k3d = "5.9.0"
+
+# AWS CLI v2: SSO login, and inspecting resources in Part B.
+aws-cli = "2.38.1"
+
+# GitHub CLI: issues, PRs and checks from the terminal.
+gh = "2.102.0"
+
+# Python package and project manager for services/agent and services/mcp-tools.
+uv = "0.13.1"
+
+# go-task: runs the Taskfile.yml shortcuts (a1-6). Registry name is "task".
+task = "3.54.0"
+
+# Git hooks: gitleaks, ruff and friends before each commit (a1-7).
+pre-commit = "4.7.0"
+
+# Interpreter for pre-commit hooks and ad-hoc scripts in scripts/.
+# mise uses prebuilt python-build-standalone binaries, so no compiler or
+# apt build dependencies are needed. uv projects pin their own version in
+# .python-version.
+python = "3.12.15"
