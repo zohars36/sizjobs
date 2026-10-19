@@ -1,0 +1,541 @@
+<title>SizJobs to Production</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@500;700&family=Source+Sans+3:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; sticky progress strip; phases as sections of checkable task rows with an expandable how-to */
+:root {
+  --bg: #f5f7f8;
+  --surface: #ffffff;
+  --fg: #1b2328;
+  --muted: #56636b;
+  --line: #dde3e6;
+  --accent: #17657e;
+  --accent-soft: #e2eff3;
+  --rec: #8a5a00;
+  --rec-soft: #fbf0d9;
+  --ok: #2d7a46;
+  --ok-soft: #e1f2e6;
+  --learn: #6b3fa0;
+  --learn-soft: #efe7f8;
+  --code-bg: #eef2f4;
+  --font-display: "Rubik", "Source Sans 3", Arial, sans-serif;
+  --font-body: "Source Sans 3", "Segoe UI", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12181b; --surface: #1a2226; --fg: #e6ecee; --muted: #9aa8af; --line: #2b363b;
+    --accent: #6cc0d9; --accent-soft: #1d3540; --rec: #f0c062; --rec-soft: #3a2e14;
+    --ok: #7fd49a; --ok-soft: #1b3324; --learn: #c4a3ef; --learn-soft: #2d2140; --code-bg: #0f1417;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12181b; --surface: #1a2226; --fg: #e6ecee; --muted: #9aa8af; --line: #2b363b;
+  --accent: #6cc0d9; --accent-soft: #1d3540; --rec: #f0c062; --rec-soft: #3a2e14;
+  --ok: #7fd49a; --ok-soft: #1b3324; --learn: #c4a3ef; --learn-soft: #2d2140; --code-bg: #0f1417;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font-body); font-size: 17px; line-height: 1.65;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 64px;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+main { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.3; }
+h1 { font-size: clamp(28px, 5.5vw, 40px); font-weight: 700; }
+h2 { font-size: 24px; font-weight: 700; }
+h3 { font-size: 19px; font-weight: 500; }
+p { margin: 0; }
+a { color: var(--accent); font-weight: 600; }
+header { display: flex; flex-direction: column; gap: 12px; }
+.eyebrow { font-family: var(--font-mono); font-size: 13px; letter-spacing: .06em; color: var(--accent); }
+.lede { font-size: 19px; color: var(--muted); max-width: 66ch; }
+code { font-family: var(--font-mono); font-size: .84em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+section { display: flex; flex-direction: column; gap: 16px; }
+.sec-title { padding-bottom: 8px; border-bottom: 2px solid var(--line); }
+
+.strip { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding-block: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; border-bottom: 1px solid var(--line); }
+.bar { flex: 1 1 220px; height: 10px; background: var(--line); border-radius: 999px; overflow: hidden; min-width: 0; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--ok); border-radius: 999px; transition: width .3s; }
+.count { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 15px; }
+.toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; color: var(--muted); cursor: pointer; }
+.save-note { font-size: 13px; color: var(--muted); flex-basis: 100%; }
+
+.product { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; gap: 10px; }
+.surfaces { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.surface { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.surface h3 { font-size: 17px; }
+.surface p { font-size: 16px; color: var(--muted); }
+.flow { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+.flow li::marker { color: var(--accent); font-weight: 700; }
+.note { background: var(--rec-soft); border-radius: 10px; padding: 14px 18px; display: flex; flex-direction: column; gap: 6px; }
+.note b { color: var(--rec); }
+.tracks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.track { border-top: 3px solid var(--accent); background: var(--surface); padding: 12px 14px; border-radius: 0 0 8px 8px; min-width: 0; }
+.track b { font-family: var(--font-display); font-weight: 500; }
+.track p { font-size: 15px; color: var(--muted); }
+.codebox { position: relative; background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.codebox .cap { font-size: 13px; color: var(--muted); padding: 6px 12px 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.codebox pre { margin: 0; padding: 10px 12px 12px; overflow-x: auto; font-family: var(--font-mono); font-size: 13.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.copy { font-family: var(--font-body); font-size: 13px; font-weight: 600; color: var(--accent); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 1px 10px; cursor: pointer; }
+.copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.principles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 24px; margin: 0; padding: 0; list-style: none; }
+.principles li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; }
+.principles li::before { content: ""; width: 8px; height: 8px; margin-top: 10px; border-radius: 2px; background: var(--accent); }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { width: 100%; border-collapse: collapse; font-size: 16px; }
+th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: var(--font-display); font-weight: 500; font-size: 14px; color: var(--muted); }
+td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+tr.total td { font-weight: 700; border-bottom: 0; background: var(--rec-soft); }
+.fine { font-size: 14px; color: var(--muted); }
+.diagram { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; }
+.diagram pre { margin: 0; }
+
+#phases { display: flex; flex-direction: column; gap: 40px; }
+.part-title { font-size: 28px; color: var(--accent); padding-top: 12px; border-top: 4px solid var(--accent); }
+.phase-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; padding-bottom: 8px; border-bottom: 2px solid var(--line); }
+.phase-head .pnum { font-family: var(--font-mono); color: var(--accent); font-size: 14px; margin-right: 10px; }
+.phase-head .pcount { font-family: var(--font-mono); font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.phase-head .pcount.full { color: var(--ok); }
+.phase-goal { color: var(--muted); }
+.later .phase-goal { color: var(--rec); }
+.tasks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.task { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 4px 12px; }
+.task.done { background: var(--ok-soft); border-color: transparent; }
+.task.done .tt { text-decoration: line-through; text-decoration-color: var(--ok); text-decoration-thickness: 2px; }
+.task > input { width: 20px; height: 20px; margin-top: 3px; accent-color: var(--ok); cursor: pointer; }
+.task > input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.task label { cursor: pointer; min-width: 0; }
+.tline { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.tid { font-family: var(--font-mono); font-size: 13px; color: var(--accent); }
+.tt { font-family: var(--font-display); font-weight: 500; font-size: 17px; }
+.chip { font-size: 13px; font-weight: 600; padding: 0 9px; border-radius: 999px; white-space: nowrap; }
+.chip.cost { color: var(--rec); background: var(--rec-soft); }
+.chip.once { color: var(--muted); border: 1px solid var(--line); }
+.chip.learn { color: var(--learn); background: var(--learn-soft); }
+.td { margin-top: 4px; }
+.tok { margin-top: 6px; font-size: 15px; color: var(--muted); }
+.tok b { color: var(--ok); font-weight: 700; }
+.how { grid-column: 2; min-width: 0; margin-top: 6px; }
+.how summary { cursor: pointer; font-weight: 700; color: var(--accent); font-size: 15px; width: fit-content; }
+.how summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.how-body { display: flex; flex-direction: column; gap: 10px; padding-top: 10px; }
+.where { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 14px; color: var(--muted); }
+.where span.w { font-size: 13px; font-weight: 600; color: var(--fg); background: var(--accent-soft); padding: 0 9px; border-radius: 999px; }
+.steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 16px; }
+.steps li::marker { color: var(--accent); font-weight: 700; }
+body.hide-done .task.done { display: none; }
+footer { font-size: 15px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; }
+@media (max-width: 720px) { .surfaces, .tracks { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 620px) {
+  body { font-size: 16px; }
+  .principles { grid-template-columns: minmax(0, 1fr); }
+  .how { grid-column: 1 / -1; }
+}
+@media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } }
+</style>
+
+<main>
+  <header>
+    <div class="eyebrow">sizjobs · GitHub · WSL · AWS eu-central-1</div>
+    <h1>SizJobs: road to production</h1>
+    <p class="lede">Every task to turn the Hermes job agents into a complete, fully automated AI system. <b>Part A</b> builds the whole product on your laptop in WSL, with $0 of infrastructure and an API model for a few dollars a month. <b>Part B</b> moves the same platform to AWS, with an environment destroyed every evening and a self-hosted model on a Spot GPU. Every task has a "How to do it" section with steps and a ready prompt for Claude Code.</p>
+  </header>
+
+  <div class="strip">
+    <span class="count" id="count">0 / 0</span>
+    <div class="bar" aria-hidden="true"><i id="barfill"></i></div>
+    <label class="toggle" for="hideDone"><input type="checkbox" id="hideDone"> Hide completed tasks</label>
+    <span class="save-note" id="saveNote">Loading progress…</span>
+  </div>
+
+  <section class="product">
+    <h2>The product</h2>
+    <p>SizJobs is a personal agent that finds jobs in Israel every morning that fit a move from DevOps to AI, explains why each one fits and what you are missing for it, and learns from your feedback. The interface is a single Telegram digest, in English.</p>
+    <p>Sources: LinkedIn job alerts from your mailbox, and a company list you build from LinkedIn. Microsoft's careers site joins in v0.2. Salary is out of scope for now. The product tasks themselves are in phase A5.</p>
+    <p><a href="__PRODUCT_URL__" target="_blank" rel="noopener">Full product description (Hebrew)</a>: capabilities by version, success metrics, rules and every decision.</p>
+  </section>
+
+  <section>
+    <h2 class="sec-title">How we work on the project</h2>
+    <h3>The setup</h3>
+    <p>VS Code, connected to WSL. The code, the tools and Claude Code all live inside WSL; VS Code on Windows is just the window into them. Install the Microsoft <b>WSL</b> extension in VS Code, and run <code>code .</code> from a WSL terminal in the project folder. Claude Code is installed inside WSL and runs in the VS Code integrated terminal, so you see its diffs in the editor as it works. Task p1-1 has the details.</p>
+
+    <h3>Who does what</h3>
+    <div class="surfaces">
+      <div class="surface"><h3>claude.ai chat</h3><p>Planning a phase before you start, drafting ADRs, explaining anything unclear, and choices like which model to run.</p></div>
+      <div class="surface"><h3>Claude Code (local)</h3><p>Most of the work: manifests, code, workflows, and Terraform in Part B. It runs in WSL with a read-only AWS profile, so it can run <code>terraform plan</code> but can't change anything in the cloud.</p></div>
+      <div class="surface"><h3>Claude Code (cloud)</h3><p>At claude.ai/code. For side tasks that need neither the local cluster nor AWS, like the README, tests, Renovate config or the evals harness. It needs the Claude GitHub App on the repo. Runs in the background and opens a PR. Never give it AWS keys.</p></div>
+    </div>
+
+    <h3>The loop for every task</h3>
+    <ol class="flow">
+      <li>New branch: <code>git switch -c p2-1-network</code></li>
+      <li>Start Claude Code in plan mode: <code>claude --permission-mode plan</code>, and paste the task prompt.</li>
+      <li>Read the plan it proposes and correct it before it writes a line. This is where you learn the most.</li>
+      <li>It implements. You review the diff in VS Code, run <code>pre-commit run -a</code>, and check the change in the local cluster (in Part B, <code>terraform plan</code>).</li>
+      <li>Open a PR with <code>Closes #N</code>, CI runs its checks, merge. In Part B, apply runs in CI.</li>
+      <li>Tick the task here. If a decision was made, add an ADR.</li>
+    </ol>
+
+    <div class="note">
+      <p><b>The real safety boundary is IAM, not Claude Code.</b> Locally you and Claude Code use a ReadOnly profile only, and in Part B cloud changes happen only through CI with OIDC. Deny rules in Claude Code are a convenient extra net, but per its own docs they are not a security boundary, since other forms of the same command can get around them. The one exception is the first apply of the persistent layer (b1-2, b1-3), which you run yourself.</p>
+      <p><b>Never paste secrets into any chat.</b> In Part A they go into <code>~/.config/sizjobs/.env</code> (a1-8), in Part B into SSM Parameter Store (b2-6), both straight from your terminal.</p>
+    </div>
+
+    <h3>A public repo</h3>
+    <ul class="flow" style="list-style: disc">
+      <li><b>Free where it matters.</b> Actions on standard runners, public GHCR packages and GitHub Pages cost nothing, and rulesets protect main.</li>
+      <li><b>Everything is visible.</b> Code, history, issues, PR comments and Actions logs. Secrets live only in the .env and in GitHub Secrets; personal data lives only in the private bucket.</li>
+      <li><b>Guardrails from the first commit.</b> The .gitignore below (a1-2), gitleaks in pre-commit and CI (a1-7), and GitHub push protection.</li>
+      <li><b>No self-hosted runners, no <code>pull_request_target</code>.</b> On a public repo both let a pull request from a fork reach your machine or your secrets.</li>
+      <li><b>Pages for the docs.</b> The plan and product pages in <code>docs/</code> can be served by GitHub Pages.</li>
+    </ul>
+
+    <h3>Build in parallel?</h3>
+    <p>Not at first. Phases A1 and A2 are foundations everything depends on, so do them in order. From A3 there are three independent tracks:</p>
+    <div class="tracks">
+      <div class="track"><b>Model and gateway</b><p>Phase A3, then A8. Local Claude Code, small and quick.</p></div>
+      <div class="track"><b>Product and agent</b><p>Phases A4 and A5. The main track, and the heart of the product.</p></div>
+      <div class="track"><b>Quality</b><p>Phases A6 and A7. The evals harness suits a cloud Claude Code session.</p></div>
+    </div>
+    <p>Two tracks in parallel is enough: one local and one in the cloud, or two local sessions on separate git worktrees. Beyond that you become the review bottleneck and reviews get shallow. Same for the agents themselves: first one agent working end to end with evals, then more agents or sources.</p>
+
+    <div class="note">
+      <p><b>The goal is that you can explain every decision in an interview.</b> Let Claude Code write the boilerplate: CI, pre-commit, Taskfile, Dockerfiles. For tasks marked <span class="chip learn">learn deeply</span>, write it yourself or go through every line, and ask Claude to explain rather than execute.</p>
+    </div>
+
+    <h3>Three files for the repo on day one</h3>
+    <div class="codebox">
+      <div class="cap"><span>.gitignore, before the first commit (a1-2). Folder patterns that start with / apply only at the repo root.</span><button class="copy" type="button" data-target="gitignore">Copy</button></div>
+<pre id="gitignore">__GITIGNORE__</pre>
+    </div>
+    <div class="codebox">
+      <div class="cap"><span>CLAUDE.md at the repo root. Claude Code reads it at the start of every session.</span><button class="copy" type="button" data-target="claudemd">Copy</button></div>
+<pre id="claudemd"># sizjobs
+SizJobs: a personal AI job-search agent (Hermes) on Kubernetes.
+Part A (now): runs locally on k3d in WSL on a 16GB laptop with no GPU; the model is an API model behind LiteLLM.
+Part B (later): the same platform on k3s in AWS eu-central-1, destroyed every evening and rebuilt in the morning.
+
+## Layout
+- platform/: ArgoCD app-of-apps and Helm values (local values, plus values-aws in Part B)
+- services/: agent, mcp-tools (Python, uv)
+- evals/: promptfoo configs and golden dataset
+- infra/persistent, infra/ephemeral: Terraform, Part B only
+- docs/: plan, product description, adr/ (one decision per file, Nygard format)
+
+## Rules
+- Code, comments, commits, issues and PRs are always in English.
+- Keep every workload small: memory requests and limits on everything; the laptop gives WSL 10GB.
+- Anything AWS-specific must have a local stand-in in Part A: MinIO for S3, the .env for SSM.
+- Images: public GHCR from main, signed with cosign; the k3d local registry only for quick branch iteration.
+- Never run terraform apply or destroy locally. CI applies on merge to main (Part B).
+- Tag every AWS resource project=sizjobs and layer=persistent|ephemeral.
+- Cost first: no NAT gateway, no ALB, no EKS. Flag anything that bills hourly.
+- No secrets in git or in prompts. Locally they live in ~/.config/sizjobs/.env, on AWS in SSM.
+- The repo is public: secrets and personal data (profile, company list, raw emails) never go into git, logs or PR comments.
+- Never print secrets in workflows, never add self-hosted runners, never use pull_request_target.
+- Run pre-commit run -a before you say a task is done.
+- When you make an architectural choice, draft an ADR in docs/adr/.
+- Explain non-obvious flags and settings in comments. I am learning this stack.</pre>
+    </div>
+    <div class="codebox">
+      <div class="cap"><span>.claude/settings.json</span><button class="copy" type="button" data-target="settingsjson">Copy</button></div>
+<pre id="settingsjson">{
+  "permissions": {
+    "deny": [
+      "Bash(terraform apply *)",
+      "Bash(terraform destroy *)",
+      "Bash(git push * main)"
+    ]
+  }
+}</pre>
+    </div>
+
+    <h3>Where to start</h3>
+    <p>In the first days, in order: a1-3 in the AWS console (including the GPU quota request, which takes time), a1-4 and a1-5 to set up WSL, VS Code and Claude Code, then a1-1 and a1-2 to create the public repo with its .gitignore and turn this plan into GitHub Issues. Then the rest of A1 and all of A2, and you have the local platform running for $0.</p>
+  </section>
+
+  <section>
+    <h2 class="sec-title">Decisions that keep the cost low</h2>
+    <ul class="principles">
+      <li><span><b>Local first.</b> Part A runs the whole product on the laptop; AWS starts only once it works.</span></li>
+      <li><span><b>API model, no local GPU.</b> A few dollars a month, behind a gateway that can switch providers.</span></li>
+      <li><span><b>Ephemeral environment in Part B.</b> Destroyed every evening and rebuilt with one command. Only a tiny persistent layer stays.</span></li>
+      <li><span><b>k3s on EC2 instead of EKS.</b> Saves about $73 a month on the control plane.</span></li>
+      <li><span><b>No NAT Gateway, no ALB.</b> Public subnets with no inbound rules, access through SSM.</span></li>
+      <li><span><b>GPU only while running.</b> A Spot node that comes up for a short window and shuts down, with a cost guard.</span></li>
+      <li><span><b>Spot everywhere.</b> The k3s server and the GPU node, billed per second.</span></li>
+      <li><span><b>Observability on free tiers.</b> Grafana Cloud and Langfuse Cloud instead of running them.</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2 class="sec-title">Architecture, Part A: on the laptop</h2>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  ts["Windows Task Scheduler"] -->|"task run, daily"| k3d
+  git[("Public GitHub repo")] -->|CI: test, build, scan| gha["GitHub Actions"]
+  gha -->|signed images| ghcr[("GHCR, public")]
+  ghcr --> job
+  subgraph wsl["WSL2 on the laptop, 10GB"]
+    reg[("k3d local registry")]
+    subgraph k3d["k3d cluster"]
+      argo2["ArgoCD"]
+      job["Agent Job: Hermes + Chromium"] --> mcp2["MCP tools"]
+      mcp2 --> pg2[("Postgres / CNPG")]
+      job --> gw2["LiteLLM gateway"]
+      pg2 -->|backups| minio[("MinIO: backups, private profile")]
+      alloy2["Grafana Alloy"]
+    end
+    ollama["Ollama, offline tests only"]
+  end
+  argo2 -.sync.-> git
+  reg -.branch builds.-> job
+  mail2["Gmail: LinkedIn alerts"] --> job
+  gw2 --> bedrock["Bedrock API model"]
+  gw2 -.local-small.-> ollama
+  gw2 --> lf2["Langfuse Cloud"]
+  alloy2 --> graf2["Grafana Cloud"]
+  job --> tg2["Telegram digest"]
+</pre>
+    </div>
+    <p>Every local stand-in has a one-to-one replacement in Part B, so the move to AWS changes configuration, not application code:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Concern</th><th>Part A, local</th><th>Part B, AWS</th></tr></thead>
+        <tbody>
+          <tr><td>Cluster</td><td>k3d in WSL</td><td>k3s on a Spot EC2 instance</td></tr>
+          <tr><td>Object storage</td><td>MinIO</td><td>S3</td></tr>
+          <tr><td>Secrets</td><td><code>.env</code> → <code>task secrets</code></td><td>SSM Parameter Store → External Secrets</td></tr>
+          <tr><td>Images</td><td>Public GHCR, signed with cosign (k3d registry for branch builds)</td><td>The same GHCR images</td></tr>
+          <tr><td>Main model</td><td>Bedrock through a scoped key</td><td>vLLM on a Spot GPU, Bedrock fallback through the instance role</td></tr>
+          <tr><td>Daily run</td><td>Windows Task Scheduler</td><td>Scheduled GitHub workflow: up, run, down</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="sec-title">Architecture, Part B: on AWS</h2>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  dev["WSL: VS Code + Claude Code"] -->|PR| gha["GitHub Actions"]
+  gha -->|signed images| ghcr[("GHCR, public")]
+  ghcr --> agent
+  gha -->|commit image tag| git[("Git repo")]
+  gha -->|"task up / task down"| aws
+  subgraph aws["AWS eu-central-1: ephemeral, destroyed nightly"]
+    subgraph k3s["k3s cluster"]
+      argo["ArgoCD"] -.sync.-> git
+      cron["CronJob: GPU window"] --> agent["Hermes agent + Chromium"]
+      agent --> mcp["MCP tools"]
+      mcp --> pg[("Postgres / CNPG")]
+      agent --> gw["LiteLLM gateway"]
+      gw --> vllm["vLLM on GPU spot node"]
+      alloy["Grafana Alloy"]
+    end
+  end
+  subgraph keep["Persistent layer, under $1 a month"]
+    s3[("S3: tfstate, backups, weights, private profile")]
+    ssm["SSM Parameter Store"]
+  end
+  mail["Gmail: LinkedIn alerts"] --> agent
+  gw -.fallback.-> api["Bedrock API model"]
+  gw --> lf["Langfuse Cloud"]
+  alloy --> graf["Grafana Cloud"]
+  agent --> tg["Telegram digest"]
+</pre>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="sec-title">Estimated monthly cost</h2>
+    <p><b>Part A:</b> about $1–5 a month for the API model, and $0 for everything else. The cluster runs on the laptop, and Grafana Cloud, Langfuse Cloud and GitHub Free cost nothing at this scale. <b>Part B</b>, once the environment runs on AWS:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Component</th><th>Assumption</th><th style="text-align:right">Per month</th></tr></thead>
+        <tbody>
+          <tr><td>k3s server</td><td>t3a.large Spot, about 8 hours on 22 workdays</td><td class="num">~$5–7</td></tr>
+          <tr><td>GPU</td><td>g4dn.xlarge Spot, about an hour per workday</td><td class="num">~$5–8</td></tr>
+          <tr><td>Disk</td><td>EBS gp3 30GB, deleted with the server</td><td class="num">~$0.7</td></tr>
+          <tr><td>Public IPv4</td><td>Only while the server exists</td><td class="num">~$0.9</td></tr>
+          <tr><td>Persistent layer</td><td>S3 for state, backups, weights and private data</td><td class="num">~$0.5–1</td></tr>
+          <tr><td>API model</td><td>Fallback and evals in CI</td><td class="num">~$1–5</td></tr>
+          <tr><td>Grafana Cloud, Langfuse Cloud, GitHub</td><td>Free tiers, public repo</td><td class="num">$0</td></tr>
+          <tr class="total"><td>Total</td><td></td><td class="num">~$13–23</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="fine">Estimates only, based on eu-central-1 (Frankfurt) prices, which run about 10–20% above us-east-1. Spot prices vary by Availability Zone, so check the AWS Pricing Calculator before you start. Assumes about 176 active hours a month. An environment left running 24/7 multiplies the server, disk and IPv4 rows by about 4.</p>
+  </section>
+
+  <div id="phases"></div>
+
+  <footer>Tick tasks as you go. Progress is saved with the page.</footer>
+</main>
+
+<script>
+const DATA = /*__DATA__*/;
+const PHASES = DATA.phases;
+const WHERE = { console: "AWS console", wsl: "WSL terminal", cc: "Claude Code (local)", cloud: "Claude Code (cloud)", chat: "claude.ai chat", gh: "GitHub" };
+
+function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function md(s) { return esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>"); }
+
+const ALL = PHASES.flatMap(p => p.tasks.map(t => t.id));
+const done = {};
+const root = document.getElementById("phases");
+function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
+
+function copyText(text, btn) {
+  const reset = () => setTimeout(() => { btn.textContent = "Copy"; }, 1500);
+  const fallback = () => {
+    const pre = btn.closest(".codebox").querySelector("pre");
+    const r = document.createRange(); r.selectNodeContents(pre);
+    const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+    btn.textContent = "Selected, press Ctrl+C"; reset();
+  };
+  try {
+    if (!navigator.clipboard) { fallback(); return; }
+    navigator.clipboard.writeText(text).then(() => { btn.textContent = "Copied"; reset(); }, fallback);
+  } catch (e) { fallback(); }
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest(".copy"); if (!b) return;
+  const pre = b.dataset.target ? document.getElementById(b.dataset.target) : b.closest(".codebox").querySelector("pre");
+  copyText(pre.textContent, b);
+});
+
+let lastPart = null;
+PHASES.forEach(p => {
+  if (p.part && p.part !== lastPart) { root.append(el("h2", "part-title", esc(p.part))); lastPart = p.part; }
+  const sec = el("section", p.later ? "later" : "");
+  const head = el("div", "phase-head");
+  head.append(el("h2", "", `<span class="pnum">Phase ${esc(p.n)}</span>${esc(p.title)}`));
+  const pc = el("span", "pcount"); pc.id = "pc-" + p.n; head.append(pc);
+  sec.append(head, el("p", "phase-goal", md(p.goal)));
+  const ul = el("ul", "tasks");
+  p.tasks.forEach(t => {
+    const li = el("li", "task"); li.id = "row-" + t.id;
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.id = "cb-" + t.id;
+    cb.addEventListener("change", () => setDone(t.id, cb.checked));
+    const lab = document.createElement("label"); lab.htmlFor = cb.id;
+    let chips = "";
+    if (t.cost) chips += `<span class="chip cost">${esc(t.cost)}</span>`;
+    if (t.once) chips += `<span class="chip once">manual, once</span>`;
+    if (t.learn) chips += `<span class="chip learn">learn deeply</span>`;
+    lab.innerHTML = `<div class="tline"><span class="tid">${t.id}</span><span class="tt">${esc(t.t)}</span>${chips}</div><p class="td">${md(t.d)}</p><p class="tok"><b>Done when:</b> ${md(t.ok)}</p>`;
+    li.append(cb, lab);
+    if ((t.steps && t.steps.length) || t.prompt) {
+      const det = el("details", "how");
+      det.append(el("summary", "", "How to do it"));
+      const body = el("div", "how-body");
+      if (t.where && t.where.length) body.append(el("div", "where", "Where: " + t.where.map(w => `<span class="w">${WHERE[w]}</span>`).join("")));
+      if (t.steps) { const ol = el("ol", "steps"); t.steps.forEach(s => ol.append(el("li", "", md(s)))); body.append(ol); }
+      if (t.prompt) {
+        const box = el("div", "codebox");
+        const cap = el("div", "cap"); cap.append(el("span", "", "Prompt for Claude Code"));
+        const btn = el("button", "copy", "Copy"); btn.type = "button"; cap.append(btn);
+        const pre = document.createElement("pre"); pre.textContent = t.prompt;
+        box.append(cap, pre); body.append(box);
+      }
+      det.append(body); li.append(det);
+    }
+    ul.append(li);
+  });
+  sec.append(ul); root.append(sec);
+});
+
+function updateUI() {
+  let total = 0;
+  PHASES.forEach(p => {
+    let c = 0;
+    p.tasks.forEach(t => {
+      const d = !!done[t.id]; if (d) c++;
+      document.getElementById("cb-" + t.id).checked = d;
+      document.getElementById("row-" + t.id).classList.toggle("done", d);
+    });
+    total += c;
+    const pc = document.getElementById("pc-" + p.n);
+    pc.textContent = c + " / " + p.tasks.length;
+    pc.classList.toggle("full", c === p.tasks.length);
+  });
+  document.getElementById("count").textContent = total + " / " + ALL.length;
+  document.getElementById("barfill").style.width = (100 * total / ALL.length) + "%";
+}
+
+const hideCb = document.getElementById("hideDone");
+try { if (localStorage.getItem("hideDone") === "1") { hideCb.checked = true; document.body.classList.add("hide-done"); } } catch (e) {}
+hideCb.addEventListener("change", () => {
+  document.body.classList.toggle("hide-done", hideCb.checked);
+  try { localStorage.setItem("hideDone", hideCb.checked ? "1" : "0"); } catch (e) {}
+});
+
+/* Mermaid: claude.ai renders the diagram itself; anywhere else (GitHub Pages, a local file) load the library. */
+if (!window.claude) {
+  const s = document.createElement("script");
+  s.src = "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js";
+  s.onload = () => {
+    try {
+      const dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      window.mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default", securityLevel: "strict" });
+      window.mermaid.run({ querySelector: ".mermaid" });
+    } catch (e) {}
+  };
+  document.head.appendChild(s);
+}
+
+let db = null, readOnly = false;
+const chains = {};
+const note = document.getElementById("saveNote");
+function loadLocal() { try { Object.assign(done, JSON.parse(localStorage.getItem("progress") || "{}")); } catch (e) {} }
+function saveLocal() { try { localStorage.setItem("progress", JSON.stringify(done)); } catch (e) {} }
+
+function setDone(id, val) {
+  if (readOnly) { updateUI(); return; }
+  done[id] = val; updateUI();
+  if (!db) { saveLocal(); return; }
+  chains[id] = (chains[id] || Promise.resolve()).then(() =>
+    db.doc("progress/" + id).set({ done: val, at: new Date().toISOString() })
+  ).catch(e => {
+    if (e && e.code === "invalid_argument") {
+      readOnly = true;
+      document.querySelectorAll(".task > input").forEach(i => i.disabled = true);
+      note.textContent = "You don't have edit access to this page, so progress is read-only.";
+    } else {
+      note.textContent = "Saving failed. Try ticking again in a moment.";
+    }
+  });
+}
+
+loadLocal(); updateUI();
+note.textContent = "Progress is saved in this browser.";
+
+(async () => {
+  try {
+    if (!window.claude || !window.claude.use) return;
+    db = await window.claude.use("db");
+    if (!db) return;
+    for (const k of Object.keys(done)) delete done[k];
+    updateUI();
+    note.textContent = "Progress is saved with the page and syncs across devices.";
+    db.collection("progress").onSnapshot(snap => {
+      for (const k of Object.keys(done)) delete done[k];
+      snap.docs.forEach(d => { const v = d.data(); if (v && v.done) done[d.id] = true; });
+      updateUI();
+    }, () => { note.textContent = "Sync disconnected. Reload the page to reconnect."; });
+  } catch (e) { db = null; }
+})();
+</script>
