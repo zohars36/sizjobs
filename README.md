@@ -75,6 +75,42 @@ that Docker is running, that WSL has enough free memory, and whether you are
 logged in to AWS. A missing tool or a stopped Docker fails it; low memory
 and no AWS login are only warnings.
 
+## Local model
+
+A small model on the laptop, for offline smoke tests only. The laptop has
+no GPU, so it is far too weak for daily job scoring; the real runs use an
+API model behind LiteLLM (a3). It answers one question quickly and for
+free: does the endpoint work, and can the model make a tool call?
+
+Ollama runs on the WSL host (not in the cluster) as a systemd service:
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh   # once
+ollama pull qwen2.5:1.5b                        # once, about 1 GB
+
+task llm:up     # start Ollama and wait for its API (asks for sudo)
+task smoke      # ✔/✘ per check: models list, then one tool call
+task llm:down   # stop it again (asks for sudo)
+```
+
+**RAM:** a loaded model holds about 1.2 GB of the 10 GB WSL has, in
+competition with the cluster. Ollama unloads it after 5 minutes idle, but
+the server keeps running until `task llm:down`. The installer also
+enables the service at boot; `sudo systemctl disable ollama` makes it
+start only when you ask.
+
+The smoke test and, later, the agent read their endpoint from three
+variables. They are configuration, not secrets, so they are not in the
+secrets map:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LLM_BASE_URL` | `http://localhost:11434/v1` | Any OpenAI-compatible endpoint: Ollama now, LiteLLM later |
+| `LLM_MODEL` | `qwen2.5:1.5b` | Model name as the endpoint knows it |
+| `LLM_API_KEY` | `ollama` | Dummy for Ollama, which ignores it; a real key for LiteLLM. Never printed |
+
+For example, `LLM_MODEL=llama3.2:1b task smoke` tests another pulled model.
+
 ## Checks
 
 The same checks run before every commit and in CI
