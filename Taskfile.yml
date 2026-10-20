@@ -281,6 +281,49 @@ tasks:
         --map config/secrets-map.yaml
         --context {{.KCTX}}
 
+  # Local model (a1-9): Ollama on the WSL host, for offline smoke tests.
+  # It is a systemd service installed by Ollama's script, so starting and
+  # stopping it needs sudo. A loaded model holds RAM the cluster needs:
+  # run llm:down when you are done.
+
+  llm:up:
+    desc: Start the local Ollama service and wait until its API answers
+    cmds:
+      - |
+        if systemctl is-active --quiet ollama; then
+          echo "==> Ollama is already running"
+        else
+          echo "==> Starting Ollama (sudo systemctl start ollama)"
+          sudo systemctl start ollama
+        fi
+      - |
+        echo "==> Waiting for the Ollama API on localhost:11434"
+        for i in $(seq 1 30); do
+          # /api/version is Ollama's cheapest endpoint; -f fails on HTTP errors.
+          if curl -sf -o /dev/null http://localhost:11434/api/version; then
+            echo "==> Ollama is up. Models: $(ollama list | tail -n +2 | awk '{print $1}' | paste -sd ' ' -)"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "==> Ollama did not answer within 30s. Logs: journalctl -u ollama -n 50"
+        exit 1
+
+  llm:down:
+    desc: Stop the local Ollama service to free its RAM
+    cmds:
+      - echo "==> Stopping Ollama (sudo systemctl stop ollama)"
+      - sudo systemctl stop ollama
+      - echo "==> Stopped."
+
+  smoke:
+    desc: "Smoke-test the LLM endpoint: models list, then one tool call (LLM_BASE_URL, LLM_MODEL)"
+    cmds:
+      - echo "==> Running scripts/smoke_llm.py"
+      # uv run --script installs the script's pinned openai SDK into a
+      # cached environment; LLM_* variables pass through from your shell.
+      - uv run --quiet --script scripts/smoke_llm.py
+
   run:
     desc: Run the agent once as a Kubernetes Job and follow its logs (a4-6)
     cmds:
