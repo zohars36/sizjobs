@@ -259,10 +259,27 @@ tasks:
         fi
 
   secrets:
-    desc: Turn ~/.config/sizjobs/.env into Kubernetes Secrets (a1-8)
+    desc: Create or update Kubernetes Secrets from ~/.config/sizjobs/.env (DRY_RUN=1 lists names only)
+    # The values never pass through Task: the script reads the file itself.
+    # Which Secret gets which keys is in config/secrets-map.yaml.
+    preconditions:
+      - sh: test -f "$HOME/.config/sizjobs/.env"
+        msg: "~/.config/sizjobs/.env not found. Create it: mkdir -p ~/.config/sizjobs && install -m 600 .env.example ~/.config/sizjobs/.env"
+      # stat -c %a prints the permission bits in octal; 600 means only you
+      # can read or write the file.
+      - sh: test "$(stat -c %a "$HOME/.config/sizjobs/.env")" = 600
+        msg: "~/.config/sizjobs/.env must be mode 600 (only you can read it). Fix: chmod 600 ~/.config/sizjobs/.env"
+    env:
+      DRY_RUN: "{{.DRY_RUN}}"
     cmds:
-      - echo "==> secrets is not implemented yet. See issue a1-8."
-      - exit 1
+      - echo "==> {{if eq .DRY_RUN "1"}}Listing{{else}}Applying{{end}} Secrets from ~/.config/sizjobs/.env using config/secrets-map.yaml"
+      # uv run --script installs the script's own pinned dependency (PyYAML)
+      # into a cached throwaway environment; see the header of the script.
+      - >-
+        uv run --quiet --script scripts/secrets_to_k8s.py
+        --env-file "$HOME/.config/sizjobs/.env"
+        --map config/secrets-map.yaml
+        --context {{.KCTX}}
 
   run:
     desc: Run the agent once as a Kubernetes Job and follow its logs (a4-6)
