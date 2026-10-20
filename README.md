@@ -67,18 +67,10 @@ tokens are cached in `~/.aws/sso/cache/`, and no access keys are created.
 ### 4. Verify
 
 ```bash
-mise ls --current && \
-terraform version | head -1 && \
-kubectl version --client && \
-helm version --short && \
-k3d version && \
-aws --version && \
-gh --version | head -1 && \
-uv --version && \
-task --version && \
-pre-commit --version && \
-python --version
+task doctor
 ```
 
-Each line should match the version in `.mise.toml`. `kubectl version
---client` only prints the client because no cluster exists yet.
+It prints every tool's version, which should match `.mise.toml`, and checks
+that Docker is running, that WSL has enough free memory, and whether you are
+logged in to AWS. A missing tool or a stopped Docker fails it; low memory
+and no AWS login are only warnings.

@@ -4,5 +4,15 @@
   "timezone": "Asia/Jerusalem",
   "schedule": ["before 6am on monday"],
   "labels": ["dependencies"],
-  "prConcurrentLimit": 5
+  "prConcurrentLimit": 5,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Versions in Taskfile.yml marked with a '# renovate:' comment on the line above",
+      "managerFilePatterns": ["/^Taskfile\\.yml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: registryUrl=(?<registryUrl>\\S+))?\\n\\s*\\w+: \"?(?<currentValue>[^\"\\s]+)\"?"
+      ]
+    }
+  ]
 }
