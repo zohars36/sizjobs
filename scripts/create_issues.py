@@ -11,6 +11,7 @@ Usage (from the repo root, after `gh auth login`):
     python3 scripts/create_issues.py --dry-run   # show what would be created
     python3 scripts/create_issues.py             # create everything
 """
+
 import argparse
 import json
 import subprocess
@@ -36,7 +37,10 @@ FIXED_LABELS = {
 
 
 def gh(*args, capture=True):
-    result = subprocess.run(["gh", *args], text=True, capture_output=capture)
+    # check=False: we test returncode ourselves to print a short message.
+    result = subprocess.run(
+        ["gh", *args], check=False, text=True, capture_output=capture
+    )
     if result.returncode != 0:
         sys.exit(f"gh {' '.join(args[:3])} failed:\n{result.stderr}")
     return result.stdout
@@ -55,13 +59,22 @@ def issue_title(task):
 
 
 def issue_body(phase, task):
-    lines = [f"**{milestone_title(phase)}**", "", task["d"], "", "## Done when", f"- [ ] {task['ok']}"]
+    lines = [
+        f"**{milestone_title(phase)}**",
+        "",
+        task["d"],
+        "",
+        "## Done when",
+        f"- [ ] {task['ok']}",
+    ]
     if task.get("cost"):
         lines += ["", f"**Cost:** {task['cost']}"]
     if task.get("where"):
         lines += ["", "## Where", ", ".join(WHERE[w] for w in task["where"])]
     if task.get("steps"):
-        lines += ["", "## Steps"] + [f"{i}. {s}" for i, s in enumerate(task["steps"], 1)]
+        lines += ["", "## Steps"] + [
+            f"{i}. {s}" for i, s in enumerate(task["steps"], 1)
+        ]
     if task.get("prompt"):
         lines += ["", "## Prompt for Claude Code", "```text", task["prompt"], "```"]
     lines += ["", "---", "_Generated from `docs/plan/tasks.json`._"]
@@ -69,9 +82,15 @@ def issue_body(phase, task):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--plan", default="docs/plan/tasks.json", help="path to tasks.json")
-    parser.add_argument("--dry-run", action="store_true", help="print actions without changing GitHub")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--plan", default="docs/plan/tasks.json", help="path to tasks.json"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="print actions without changing GitHub"
+    )
     args = parser.parse_args()
 
     plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
@@ -83,7 +102,16 @@ def main():
     for name, (color, desc) in labels.items():
         print(f"label     {name}")
         if not args.dry_run:
-            gh("label", "create", name, "--color", color, "--description", desc[:100], "--force")
+            gh(
+                "label",
+                "create",
+                name,
+                "--color",
+                color,
+                "--description",
+                desc[:100],
+                "--force",
+            )
 
     # Milestones: one per phase, skipped when the title already exists.
     existing_ms = set()
@@ -97,12 +125,21 @@ def main():
             continue
         print(f"milestone {title}")
         if not args.dry_run:
-            gh("api", "repos/{owner}/{repo}/milestones", "-f", f"title={title}", "-f", f"description={p['goal']}")
+            gh(
+                "api",
+                "repos/{owner}/{repo}/milestones",
+                "-f",
+                f"title={title}",
+                "-f",
+                f"description={p['goal']}",
+            )
 
     # Issues: in plan order, so issue numbers follow the plan. Skipped when the title exists.
     existing_issues = set()
     if not args.dry_run:
-        out = gh("issue", "list", "--state", "all", "--limit", "1000", "--json", "title")
+        out = gh(
+            "issue", "list", "--state", "all", "--limit", "1000", "--json", "title"
+        )
         existing_issues = {i["title"] for i in json.loads(out)}
     created = skipped = 0
     for p in phases:
@@ -120,14 +157,28 @@ def main():
                 issue_labels.append("later")
             print(f"issue     {title}  [{', '.join(issue_labels)}]")
             if not args.dry_run:
-                with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:
+                with tempfile.NamedTemporaryFile(
+                    "w", suffix=".md", delete=False, encoding="utf-8"
+                ) as f:
                     f.write(issue_body(p, t))
-                gh("issue", "create", "--title", title, "--body-file", f.name,
-                   "--milestone", milestone_title(p), "--label", ",".join(issue_labels))
+                gh(
+                    "issue",
+                    "create",
+                    "--title",
+                    title,
+                    "--body-file",
+                    f.name,
+                    "--milestone",
+                    milestone_title(p),
+                    "--label",
+                    ",".join(issue_labels),
+                )
                 Path(f.name).unlink()
                 time.sleep(1)  # stay well under GitHub's secondary rate limits
             created += 1
-    print(f"\n{'Would create' if args.dry_run else 'Created'} {created} issues, skipped {skipped} existing.")
+    print(
+        f"\n{'Would create' if args.dry_run else 'Created'} {created} issues, skipped {skipped} existing."
+    )
 
 
 if __name__ == "__main__":
