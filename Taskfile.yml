@@ -1,0 +1,294 @@
+# Shortcuts for everyday sizjobs commands, run with go-task (https://taskfile.dev).
+#
+#   task --list    show every task with its description
+#   task dev:up    bring up the local k3d cluster with ArgoCD
+#
+# Tools come from .mise.toml, so run `mise install` first.
+#
+# Every kubectl and helm call names the k3d context explicitly, so a task
+# never touches another cluster that happens to be the current context.
+
+version: "3"
+
+# Task normally echoes each command before running it. We turn that off and
+# print a readable "==> ..." line per step instead. `task --verbose` shows
+# the raw commands again when debugging.
+silent: true
+
+vars:
+  CLUSTER: sizjobs
+  # k3d prefixes its kubeconfig contexts with "k3d-".
+  KCTX: k3d-{{.CLUSTER}}
+  # Cluster definition: one server, local registry, Traefik off (a2-1).
+  K3D_CONFIG: platform/k3d/cluster.yaml
+  # Local registry created by K3D_CONFIG. The host pushes to localhost:5000
+  # (Docker allows plain HTTP to localhost with no extra setup), and a
+  # mirror in the k3d config makes the same name work inside the cluster.
+  REGISTRY: localhost:5000
+  ARGOCD_NAMESPACE: argocd
+  # renovate: datasource=helm depName=argo-cd registryUrl=https://argoproj.github.io/argo-helm
+  ARGOCD_CHART_VERSION: "10.10.5"
+  ARGOCD_VALUES: platform/argocd/values-local.yaml
+  # The root Application of the app-of-apps (a2-2).
+  ROOT_APP: platform/root-app.yaml
+  BRANCH:
+    sh: git rev-parse --abbrev-ref HEAD
+  # Image tag: short commit, plus "-dirty" when there are uncommitted
+  # changes, so a local build is never mistaken for a committed one.
+  TAG:
+    sh: echo "$(git rev-parse --short HEAD)$(git diff --quiet HEAD || echo -dirty)"
+
+tasks:
+  default:
+    desc: List the available tasks
+    cmds:
+      - task --list
+
+  doctor:
+    desc: Check prerequisites and print versions (mise tools, Docker, free memory, AWS login)
+    vars:
+      # Below this much available memory the cluster is unlikely to fit.
+      MIN_AVAILABLE_MIB: 3072
+      # .wslconfig should give WSL about 10GB; warn when it clearly does not.
+      MIN_TOTAL_MIB: 9000
+    cmds:
+      - |
+        failed=0
+        ok()   { echo "    ok    $*"; }
+        warn() { echo "    WARN  $*"; }
+        bad()  { echo "    FAIL  $*"; failed=1; }
+        # Prints the first line of a tool's version output, or fails if the
+        # tool is not on PATH. Usage: check <binary> <version command...>
+        check() {
+          bin=$1; shift
+          if command -v "$bin" >/dev/null 2>&1; then
+            ok "$bin: $("$@" 2>&1 | head -1)"
+          else
+            bad "$bin not on PATH. Run 'mise install' and activate mise in your shell."
+          fi
+        }
+
+        echo "==> mise and the tools pinned in .mise.toml"
+        if command -v mise >/dev/null 2>&1; then
+          # mise prints "new version available" notices on stderr; drop them.
+          ok "mise: $(mise --version 2>/dev/null)"
+          # --current: only tools in this repo's config; --missing: only
+          # those not installed. Empty output means everything is there.
+          missing=$(mise ls --current --missing 2>/dev/null)
+          if [ -n "$missing" ]; then
+            bad "pinned tools not installed, run 'mise install':"
+            echo "$missing" | sed 's/^/          /'
+          fi
+        else
+          bad "mise not found. See README, Local setup."
+        fi
+        check terraform  terraform version
+        check kubectl    kubectl version --client
+        check helm       helm version --short
+        check k3d        k3d version
+        check aws        aws --version
+        check gh         gh --version
+        check uv         uv --version
+        check task       task --version
+        check pre-commit pre-commit --version
+        check python     python --version
+
+        echo "==> Docker"
+        if ! command -v docker >/dev/null 2>&1; then
+          bad "docker not on PATH."
+        # {{"{{"}} inside a Taskfile is a template; this renders the literal
+        # Go template '{{"{{"}}.ServerVersion{{"}}"}}' that docker expects.
+        elif server=$(docker info --format '{{"{{"}}.ServerVersion{{"}}"}}' 2>/dev/null); then
+          ok "daemon running, server $server ($(docker --version))"
+        else
+          bad "daemon not reachable. Start Docker, and check that your user is in the docker group ('groups')."
+        fi
+
+        echo "==> Memory"
+        # MemAvailable counts free memory plus cache the kernel can drop,
+        # which is what new pods can actually get. Values are in KiB.
+        total=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)
+        avail=$(awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo)
+        if [ "$avail" -lt {{.MIN_AVAILABLE_MIB}} ]; then
+          warn "$avail MiB available of $total MiB, below {{.MIN_AVAILABLE_MIB}} MiB. Stop Ollama or unused containers."
+        else
+          ok "$avail MiB available of $total MiB"
+        fi
+        if [ "$total" -lt {{.MIN_TOTAL_MIB}} ]; then
+          warn "WSL has $total MiB in total. Set memory=10GB in %UserProfile%\\.wslconfig and run 'wsl --shutdown'."
+        fi
+
+        echo "==> AWS (profile ${AWS_PROFILE:-default}; not required for Part A)"
+        # Short timeouts so doctor does not hang when offline.
+        if arn=$(aws sts get-caller-identity --query Arn --output text \
+                   --cli-connect-timeout 5 --cli-read-timeout 10 2>/dev/null); then
+          # The ARN holds the account ID and the SSO user name. Print only
+          # the role and the last 4 digits of the account, so the output is
+          # safe to paste into a public issue.
+          account=$(echo "$arn" | cut -d: -f5 | cut -c9-12)
+          role=$(echo "$arn" | cut -d/ -f2)
+          ok "logged in: role $role, account ****$account"
+        else
+          warn "not logged in. Run 'aws sso login' (needed for Bedrock and Part B)."
+        fi
+
+        if [ "$failed" -ne 0 ]; then
+          echo "==> Some required checks failed (FAIL above)."
+          exit 1
+        fi
+        echo "==> All required checks passed."
+
+  # ---------------------------------------------------------------------------
+  # Part A: local k3d
+  # ---------------------------------------------------------------------------
+
+  dev:up:
+    desc: Create or start the k3d cluster, install ArgoCD and point it at platform/ on the current branch
+    preconditions:
+      - sh: docker info >/dev/null 2>&1
+        msg: "Cannot reach Docker. Start it, and check that your user is in the docker group ('groups')."
+      - sh: test -f {{.K3D_CONFIG}}
+        msg: "{{.K3D_CONFIG}} not found. The k3d cluster config is added in a2-1."
+      - sh: test "{{.BRANCH}}" != "HEAD"
+        msg: "Detached HEAD. Check out a branch: ArgoCD tracks a branch, not a commit."
+    cmds:
+      - task: cluster:start
+      - task: argocd:install
+      - task: argocd:root
+      - echo "==> Local environment is up on branch {{.BRANCH}}."
+      - echo "    ArgoCD UI    kubectl --context {{.KCTX}} -n {{.ARGOCD_NAMESPACE}} port-forward svc/argocd-server 8080:443"
+      - echo "    Password     kubectl --context {{.KCTX}} -n {{.ARGOCD_NAMESPACE}} get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+
+  dev:down:
+    desc: Stop the k3d cluster, keeping its data for the next dev:up
+    cmds:
+      - echo "==> Stopping cluster {{.CLUSTER}}. Volumes and images are kept; task dev:up starts it again."
+      # `stop` only stops the node containers. `k3d cluster delete` would
+      # remove them and everything not on the host volume.
+      - k3d cluster stop {{.CLUSTER}}
+      - echo "==> Stopped. The registry container may still run (a few MB of RAM); 'docker stop registry.localhost' stops it."
+
+  cluster:start:
+    internal: true
+    cmds:
+      - |
+        # `k3d cluster get` exits non-zero when the cluster does not exist.
+        if k3d cluster get {{.CLUSTER}} >/dev/null 2>&1; then
+          echo "==> Cluster {{.CLUSTER}} exists, starting it (no-op if it is running)"
+          k3d cluster start {{.CLUSTER}}
+        else
+          echo "==> Creating cluster {{.CLUSTER}} from {{.K3D_CONFIG}}"
+          # Host directories mounted by the k3d config: persistent volumes
+          # and registry images. Created here so Docker does not create
+          # them as root.
+          mkdir -p "$HOME/.local/share/sizjobs/storage" "$HOME/.local/share/sizjobs/registry"
+          # Passing the name on the command line overrides metadata.name in
+          # the config file, so CLUSTER here is always the real name.
+          k3d cluster create {{.CLUSTER}} --config {{.K3D_CONFIG}}
+        fi
+      - echo "==> Waiting for the node to be Ready"
+      - kubectl --context {{.KCTX}} wait --for=condition=Ready nodes --all --timeout=180s
+
+  argocd:install:
+    internal: true
+    cmds:
+      - echo "==> Installing ArgoCD (Helm chart argo-cd {{.ARGOCD_CHART_VERSION}}) in namespace {{.ARGOCD_NAMESPACE}}"
+      # upgrade --install: installs the first time, upgrades in place after,
+      #   so dev:up can be run any number of times.
+      # --wait: Helm 4 waits only for hooks by default; bare --wait waits
+      #   until every Deployment is ready (the "watcher" strategy).
+      # --history-max 3: each dev:up adds a Helm revision, stored as a
+      #   Secret in the cluster; keep only the last three.
+      - >-
+        helm upgrade --install argocd argo-cd
+        --repo https://argoproj.github.io/argo-helm
+        --version {{.ARGOCD_CHART_VERSION}}
+        --kube-context {{.KCTX}}
+        --namespace {{.ARGOCD_NAMESPACE}} --create-namespace
+        --values {{.ARGOCD_VALUES}}
+        --history-max 3
+        --wait --timeout 5m
+
+  argocd:root:
+    internal: true
+    cmds:
+      - |
+        if [ ! -f {{.ROOT_APP}} ]; then
+          echo "==> {{.ROOT_APP}} not found (added in a2-2). ArgoCD is installed but has nothing to sync yet."
+          exit 0
+        fi
+        # ArgoCD pulls from GitHub, not from this working copy, so it only
+        # sees commits that are pushed.
+        if ! git ls-remote --exit-code --heads origin {{.BRANCH}} >/dev/null 2>&1; then
+          echo "==> WARNING: branch {{.BRANCH}} is not on origin. Push it, or ArgoCD cannot sync."
+        elif [ -n "$(git log --oneline origin/{{.BRANCH}}..HEAD 2>/dev/null)" ]; then
+          echo "==> WARNING: {{.BRANCH}} has unpushed commits. ArgoCD syncs what is on origin."
+        fi
+        echo "==> Applying {{.ROOT_APP}} with targetRevision {{.BRANCH}}"
+        # The file targets main (what the EC2 cluster runs). Locally we swap
+        # every targetRevision for the current branch before applying.
+        sed -E 's#^( *targetRevision:).*#\1 {{.BRANCH}}#' {{.ROOT_APP}} \
+          | kubectl --context {{.KCTX}} apply -f -
+
+  build:
+    desc: Build every service image and push it to the local k3d registry
+    preconditions:
+      - sh: curl -sf -o /dev/null http://{{.REGISTRY}}/v2/
+        msg: "Registry {{.REGISTRY}} is not reachable. Run task dev:up first."
+    cmds:
+      - |
+        built=0
+        for dockerfile in services/*/Dockerfile; do
+          # Without a match the glob stays literal; skip it.
+          [ -f "$dockerfile" ] || continue
+          dir=$(dirname "$dockerfile")
+          image="{{.REGISTRY}}/sizjobs-$(basename "$dir")"
+          echo "==> Building $image:{{.TAG}} from $dir"
+          # The extra :dev tag always points at the latest local build, for
+          # manifests that do not pin a commit.
+          docker build -t "$image:{{.TAG}}" -t "$image:dev" "$dir"
+          echo "==> Pushing $image:{{.TAG}} and $image:dev"
+          docker push --quiet "$image:{{.TAG}}"
+          docker push --quiet "$image:dev"
+          built=$((built + 1))
+        done
+        if [ "$built" -eq 0 ]; then
+          echo "==> No services/*/Dockerfile yet, nothing to build."
+        else
+          echo "==> Built and pushed $built image(s) with tag {{.TAG}}."
+        fi
+
+  secrets:
+    desc: Turn ~/.config/sizjobs/.env into Kubernetes Secrets (a1-8)
+    cmds:
+      - echo "==> secrets is not implemented yet. See issue a1-8."
+      - exit 1
+
+  run:
+    desc: Run the agent once as a Kubernetes Job and follow its logs (a4-6)
+    cmds:
+      - echo "==> run is not implemented yet. See issue a4-6."
+      - exit 1
+
+  eval:
+    desc: Run the promptfoo evals in evals/ against the golden dataset (a7-2)
+    cmds:
+      - echo "==> eval is not implemented yet. See issue a7-2."
+      - exit 1
+
+  # ---------------------------------------------------------------------------
+  # Part B: AWS. Terraform never runs from the laptop; these will trigger
+  # the GitHub Actions workflows that do.
+  # ---------------------------------------------------------------------------
+
+  up:
+    desc: "Part B: bring up the AWS environment through the env-up workflow (b3-2)"
+    cmds:
+      - echo "==> up is a Part B placeholder. It will trigger the env-up workflow (b3-2); it never runs terraform locally."
+      - exit 1
+
+  down:
+    desc: "Part B: tear down the AWS environment through the env-down workflow"
+    cmds:
+      - echo "==> down is a Part B placeholder. It will trigger the env-down workflow; it never runs terraform locally."
+      - exit 1
