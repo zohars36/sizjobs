@@ -10,8 +10,8 @@
 name: tracked-files
 
 on:
-  # pull_request (not pull_request_target): runs with the PR's own code and
-  # a read-only token, so forks cannot reach secrets.
+  # The plain pull_request trigger (not its "_target" variant): runs with
+  # the PR's own code and a read-only token, so forks cannot reach secrets.
   pull_request:
   push:
     branches: [main]

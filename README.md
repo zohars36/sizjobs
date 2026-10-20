@@ -74,3 +74,33 @@ It prints every tool's version, which should match `.mise.toml`, and checks
 that Docker is running, that WSL has enough free memory, and whether you are
 logged in to AWS. A missing tool or a stopped Docker fails it; low memory
 and no AWS login are only warnings.
+
+## Checks
+
+The same checks run before every commit and in CI
+(`.github/workflows/pre-commit.yml`). Turn them on once per clone:
+
+```bash
+pre-commit install          # run the hooks on every `git commit`
+pre-commit run --all-files  # check the whole repo by hand
+```
+
+| Hook | What it catches |
+|---|---|
+| trailing-whitespace, end-of-file-fixer | Whitespace noise (fixed in place) |
+| check-yaml, check-merge-conflict | Broken YAML, leftover `<<<<<<<` markers |
+| check-added-large-files | Files over 1 MB |
+| detect-private-key, gitleaks | Keys, tokens and other secrets |
+| ruff-check, ruff-format | Python lint and formatting (fixed in place) |
+| terraform_fmt, terraform_validate, terraform_tflint | Terraform formatting, validity and lint (Part B) |
+| trivy config | HIGH and CRITICAL misconfigurations in Terraform, Kubernetes YAML and Dockerfiles |
+| workflow-guard | `self-hosted` runners or `pull_request_target` in a workflow |
+| zizmor | Insecure GitHub Actions: unpinned actions, persisted credentials, risky triggers |
+
+When a fixer changes a file, the commit stops: review the change, `git add`
+it and commit again. CI also scans the full git history with
+`gitleaks git`, because the hook only sees staged changes.
+
+Never skip the hooks with `--no-verify`; fix the cause. To silence a false
+positive, use the tool's own inline ignore (`# noqa`, `# zizmor: ignore[...]`,
+`#trivy:ignore:<id>`, `gitleaks:allow`) with a comment saying why.

@@ -22,5 +22,6 @@ Part B (later): the same platform on k3s in AWS eu-central-1, destroyed every ev
 - The repo is public: secrets and personal data (profile, company list, raw emails) never go into git, logs or PR comments.
 - Never print secrets in workflows, never add self-hosted runners, never use pull_request_target.
 - Run pre-commit run -a before you say a task is done.
+- Never bypass hooks with --no-verify; fix the cause.
 - When you make an architectural choice, draft an ADR in docs/adr/.
 - Explain non-obvious flags and settings in comments. I am learning this stack.

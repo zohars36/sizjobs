@@ -5,6 +5,7 @@
   "schedule": ["before 6am on monday"],
   "labels": ["dependencies"],
   "prConcurrentLimit": 5,
+  "pre-commit": { "enabled": true },
   "customManagers": [
     {
       "customType": "regex",
