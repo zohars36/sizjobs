@@ -19,6 +19,8 @@ Part B (later): the same platform on k3s in AWS eu-central-1, destroyed every ev
 - Tag every AWS resource project=sizjobs and layer=persistent|ephemeral.
 - Cost first: no NAT gateway, no ALB, no EKS. Flag anything that bills hourly.
 - No secrets in git or in prompts. Locally they live in ~/.config/sizjobs/.env, on AWS in SSM.
+- Never read or print ~/.config/sizjobs/.env; use task secrets.
+- A PreToolUse hook (.claude/hooks/guard-secrets.sh) blocks any tool call touching ~/.config/sizjobs.
 - The repo is public: secrets and personal data (profile, company list, raw emails) never go into git, logs or PR comments.
 - Never print secrets in workflows, never add self-hosted runners, never use pull_request_target.
 - Run pre-commit run -a before you say a task is done.
