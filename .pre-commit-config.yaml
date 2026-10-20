@@ -1,0 +1,88 @@
+# Git hooks run by pre-commit (https://pre-commit.com) before every commit,
+# and on every file in CI (.github/workflows/pre-commit.yml).
+#
+#   pre-commit install          once per clone: hook into `git commit`
+#   pre-commit run --all-files  check the whole repo, not only staged files
+#
+# Never skip them with `git commit --no-verify`; fix the cause instead.
+#
+# Each `rev` is a pinned tag. Renovate's pre-commit manager bumps them.
+# Hooks from remote repos run in their own environments that pre-commit
+# builds and caches in ~/.cache/pre-commit. `language: system` hooks use
+# the tools from .mise.toml instead.
+
+# Generated pages: rebuilt by scripts/build_plan_page.py, never hand-edited,
+# so the whitespace fixers would only fight the generator.
+exclude: ^docs/(plan|product)/index\.html$
+
+repos:
+  # Generic file hygiene.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        # Kubernetes manifests often hold several documents split by "---".
+        args: [--allow-multiple-documents]
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: detect-private-key
+
+  # Secret scanner. On commit it scans only the staged changes, so in CI,
+  # where nothing is staged, the workflow also runs `gitleaks git` over the
+  # full history.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.0
+    hooks:
+      - id: gitleaks
+
+  # Python lint and format for services/ and scripts/.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.1
+    hooks:
+      # "ruff-check" is the current id of the hook formerly called "ruff".
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  # Terraform (Part B). These hooks call the terraform and tflint binaries
+  # on PATH, i.e. the versions pinned in .mise.toml. They only run when
+  # .tf files change, so they are skipped until infra/ has code.
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.109.2
+    hooks:
+      - id: terraform_fmt
+      - id: terraform_validate
+      - id: terraform_tflint
+
+  - repo: local
+    hooks:
+      # Misconfiguration scan of Terraform, Kubernetes YAML and Dockerfiles.
+      # `mise exec` runs the trivy version pinned in .mise.toml even when
+      # mise is not activated in the shell (e.g. a commit from the IDE).
+      # pass_filenames: false because trivy scans the whole repo itself;
+      # `files` only decides whether the hook runs at all.
+      - id: trivy-config
+        name: trivy config
+        language: system
+        entry: mise exec -- trivy config --exit-code 1 --severity HIGH,CRITICAL .
+        pass_filenames: false
+        files: (\.tf|\.ya?ml|Dockerfile)$
+
+      # CLAUDE.md: never self-hosted runners (a public repo would let any
+      # fork run code on them) and never pull_request_target (runs fork
+      # code with a write token and secrets). pygrep fails on any match.
+      - id: workflow-guard
+        name: no self-hosted runners or pull_request_target
+        language: pygrep
+        entry: self-hosted|pull_request_target
+        files: ^\.github/workflows/
+
+  # Static analysis for GitHub Actions: template injection, over-broad
+  # permissions, unpinned actions, credential persistence.
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.31.1
+    hooks:
+      - id: zizmor

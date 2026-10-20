@@ -1,0 +1,57 @@
+# Runs every pre-commit hook on every file, plus a gitleaks scan of the
+# full git history. Same hooks and tool versions as on the laptop.
+name: pre-commit
+
+on:
+  # The plain pull_request trigger: the PR's own code with a read-only
+  # token, so a fork cannot reach secrets.
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege for GITHUB_TOKEN: this workflow only reads the repo.
+permissions:
+  contents: read
+
+jobs:
+  pre-commit:
+    name: pre-commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Actions are pinned to a full commit SHA, not a tag: tags can be
+      # moved, so a compromised action could otherwise change under us.
+      # Renovate bumps the SHA and the version comment together.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history, for `gitleaks git` below.
+          fetch-depth: 0
+          # Do not leave the token in .git/config for later steps.
+          persist-credentials: false
+
+      # Installs the tools from .mise.toml and caches them between runs.
+      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+        with:
+          # Pin mise itself too, rather than "newest".
+          version: 2026.10.13
+          # Only what the hooks need; aws-cli, kubectl and friends would
+          # just slow the job down.
+          install_args: python pre-commit terraform tflint trivy gitleaks
+
+      # pre-commit builds an environment per hook repo (Python venvs, the
+      # gitleaks Go build). The key changes whenever a rev changes.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      # --show-diff-on-failure: when a fixer hook changes a file, print the
+      # diff so you can see what to fix locally.
+      - name: pre-commit
+        run: pre-commit run --all-files --show-diff-on-failure
+
+      # The gitleaks hook scans staged changes only, and nothing is staged
+      # in CI. This scans every commit in the history instead.
+      # --redact: never print the secret itself in the log (public repo).
+      - name: gitleaks (full history)
+        run: gitleaks git --redact --verbose
