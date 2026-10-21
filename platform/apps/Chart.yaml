@@ -1,0 +1,14 @@
+# A Helm chart that renders the child Applications of the app-of-apps.
+# It is a chart, not a plain directory, for one reason: so every child can
+# take its git revision from a value (.Values.revision) that the root
+# Application sets, keeping the whole tree on one branch. See
+# docs/adr/0005-one-revision-for-app-of-apps.md.
+#
+# Render it by hand to check a change:
+#   helm template platform/apps --set revision=my-branch
+apiVersion: v2
+name: apps
+description: Child Applications of the sizjobs app-of-apps
+type: application
+# Never published, so the version never needs bumping.
+version: 0.1.0

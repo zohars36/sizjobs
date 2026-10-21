@@ -1,0 +1,48 @@
+# The root of the app-of-apps: the one Application created by hand
+# (`task dev:up` locally, the EC2 bootstrap in Part B). Everything else in
+# the cluster is a child Application rendered from platform/apps.
+#
+# One revision for the whole tree: targetRevision below is the only place
+# it is set. The two Helm parameters hand it, and the repo URL, down to
+# platform/apps, whose child Applications use them for their own sources.
+# The file in git says main (what EC2 runs); `task dev:up` swaps in the
+# current branch before applying it. See docs/adr/0005-one-revision-for-app-of-apps.md.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  # Applications must live in ArgoCD's own namespace.
+  namespace: argocd
+  # No resources-finalizer here on purpose: deleting the root Application
+  # by hand should not cascade into deleting every app in the cluster.
+spec:
+  # The built-in project, which allows any repo and namespace. a2-5
+  # (cluster security) can narrow this.
+  project: default
+  source:
+    # Public repo, so ArgoCD needs no credentials to clone it.
+    repoURL: https://github.com/zohars36/sizjobs
+    targetRevision: main
+    # platform/apps is a small Helm chart; see its Chart.yaml.
+    path: platform/apps
+    helm:
+      parameters:
+        # ArgoCD replaces these $ARGOCD_* build variables with this
+        # Application's own source revision and repo URL before running
+        # `helm template`, so the children cannot drift from the root.
+        # (They are ArgoCD's syntax, not shell: nothing expands them here.)
+        - name: revision
+          value: $ARGOCD_APP_SOURCE_TARGET_REVISION
+        - name: repoURL
+          value: $ARGOCD_APP_SOURCE_REPO_URL
+  destination:
+    # The cluster ArgoCD runs in.
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      # Delete child Applications that were removed from git.
+      prune: true
+      # Undo changes made to the children outside git.
+      selfHeal: true

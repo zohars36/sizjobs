@@ -24,6 +24,7 @@ Part B (later): the same platform on k3s in AWS eu-central-1, destroyed every ev
 - A PreToolUse hook (.claude/hooks/guard-secrets.sh) blocks any tool call touching ~/.config/sizjobs.
 - The repo is public: secrets and personal data (profile, company list, raw emails) never go into git, logs or PR comments.
 - Never print secrets in workflows, never add self-hosted runners, never use pull_request_target.
+- Cluster state changes go through git and ArgoCD. Never kubectl apply/edit/delete resources ArgoCD manages; selfHeal reverts them.
 - Run pre-commit run -a before you say a task is done.
 - Never bypass hooks with --no-verify; fix the cause.
 - When you make an architectural choice, draft an ADR in docs/adr/.
