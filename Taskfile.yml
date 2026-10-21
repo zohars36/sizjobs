@@ -1,7 +1,7 @@
 # Shortcuts for everyday sizjobs commands, run with go-task (https://taskfile.dev).
 #
 #   task --list    show every task with its description
-#   task dev:up    bring up the local k3d cluster with ArgoCD
+#   task dev:up    bring up the local k3d cluster (ArgoCD follows in a2-2)
 #
 # Tools come from .mise.toml, so run `mise install` first.
 #
@@ -20,7 +20,10 @@ vars:
   # k3d prefixes its kubeconfig contexts with "k3d-".
   KCTX: k3d-{{.CLUSTER}}
   # Cluster definition: one server, local registry, Traefik off (a2-1).
-  K3D_CONFIG: platform/k3d/cluster.yaml
+  K3D_CONFIG: k3d/sizjobs.yaml
+  # Docker container names k3d gives the server node and the registry.
+  SERVER_CONTAINER: k3d-{{.CLUSTER}}-server-0
+  REGISTRY_CONTAINER: registry.localhost
   # Local registry created by K3D_CONFIG. The host pushes to localhost:5000
   # (Docker allows plain HTTP to localhost with no extra setup), and a
   # mirror in the k3d config makes the same name work inside the cluster.
@@ -104,6 +107,23 @@ tasks:
           bad "daemon not reachable. Start Docker, and check that your user is in the docker group ('groups')."
         fi
 
+        echo "==> Optional: pushing to registry.localhost:5000 (localhost:5000 needs none of this)"
+        # Docker only speaks plain HTTP to registries in its insecure list
+        # (plus IP literals in 127.0.0.0/8). IndexConfigs is that list as
+        # JSON; the key appears once daemon.json names the registry.
+        if docker info --format '{{"{{"}}json .RegistryConfig.IndexConfigs{{"}}"}}' 2>/dev/null \
+             | grep -q '"registry.localhost:5000"'; then
+          ok "registry.localhost:5000 is in Docker's insecure-registries"
+        else
+          warn "registry.localhost:5000 is not in Docker's insecure-registries. See README, Local cluster, Pushing an image."
+        fi
+        # getent asks the system resolver (/etc/hosts first), like Docker does.
+        if [ "$(getent hosts registry.localhost | awk '{print $1; exit}')" = 127.0.0.1 ]; then
+          ok "registry.localhost resolves to 127.0.0.1"
+        else
+          warn "registry.localhost does not resolve to 127.0.0.1. See README, Local cluster, Pushing an image."
+        fi
+
         echo "==> Memory"
         # MemAvailable counts free memory plus cache the kernel can drop,
         # which is what new pods can actually get. Values are in KiB.
@@ -143,40 +163,87 @@ tasks:
   # ---------------------------------------------------------------------------
 
   dev:up:
-    desc: Create or start the k3d cluster, install ArgoCD and point it at platform/ on the current branch
-    preconditions:
+    desc: Create or start the k3d cluster (safe to run any number of times) and wait until it is Ready
+    # The YAML anchor (&dev_preconditions) lets the other dev:* tasks reuse
+    # this list with *dev_preconditions. Task itself never sees the anchor.
+    preconditions: &dev_preconditions
       - sh: docker info >/dev/null 2>&1
         msg: "Cannot reach Docker. Start it, and check that your user is in the docker group ('groups')."
+      # --current: tools in this repo's .mise.toml; --missing: only those
+      # not installed. Any output means something is missing.
+      - sh: command -v mise >/dev/null 2>&1 && test -z "$(mise ls --current --missing 2>/dev/null)"
+        msg: "Tools pinned in .mise.toml are missing (or mise is not installed). Run 'mise install'; 'task doctor' shows details."
+      - sh: command -v k3d >/dev/null 2>&1 && command -v kubectl >/dev/null 2>&1
+        msg: "k3d or kubectl is not on PATH. Activate mise in your shell (README, Local setup)."
       - sh: test -f {{.K3D_CONFIG}}
-        msg: "{{.K3D_CONFIG}} not found. The k3d cluster config is added in a2-1."
-      - sh: test "{{.BRANCH}}" != "HEAD"
-        msg: "Detached HEAD. Check out a branch: ArgoCD tracks a branch, not a commit."
+        msg: "{{.K3D_CONFIG}} not found. Run task from the repo root."
     cmds:
       - task: cluster:start
-      - task: argocd:install
-      - task: argocd:root
-      - echo "==> Local environment is up on branch {{.BRANCH}}."
-      - echo "    ArgoCD UI    kubectl --context {{.KCTX}} -n {{.ARGOCD_NAMESPACE}} port-forward svc/argocd-server 8080:443"
-      - echo "    Password     kubectl --context {{.KCTX}} -n {{.ARGOCD_NAMESPACE}} get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+      # TODO(a2-2): install ArgoCD and apply the root app here:
+      #   - task: argocd:install
+      #   - task: argocd:root
+      # and restore the detached-HEAD precondition (ArgoCD tracks a branch).
+      - echo "==> TODO(a2-2) ArgoCD is not installed yet; the cluster is empty apart from k3s's own add-ons."
+      - echo "==> Cluster {{.CLUSTER}} is up. kubectl context {{.KCTX}}, registry {{.REGISTRY}}."
 
   dev:down:
     desc: Stop the k3d cluster, keeping its data for the next dev:up
+    preconditions: *dev_preconditions
     cmds:
-      - echo "==> Stopping cluster {{.CLUSTER}}. Volumes and images are kept; task dev:up starts it again."
-      # `stop` only stops the node containers. `k3d cluster delete` would
-      # remove them and everything not on the host volume.
+      - echo "==> Stopping cluster {{.CLUSTER}}. PVC data and images are kept; task dev:up starts it again."
+      # `stop` only stops the containers (node and registry) and frees
+      # their RAM. `k3d cluster delete` would remove them.
       - k3d cluster stop {{.CLUSTER}}
-      - echo "==> Stopped. The registry container may still run (a few MB of RAM); 'docker stop registry.localhost' stops it."
+      - echo "==> Stopped."
+
+  dev:delete:
+    desc: Delete the k3d cluster (PVC data and registry images in ~/.local/share/sizjobs stay)
+    # Task asks y/N before running; `task dev:delete --yes` skips the question.
+    prompt: Delete cluster {{.CLUSTER}}? Everything in it is lost except PVC data and images in ~/.local/share/sizjobs.
+    preconditions: *dev_preconditions
+    cmds:
+      - echo "==> Deleting cluster {{.CLUSTER}}"
+      # Removes the node and registry containers and the k3d-sizjobs
+      # context from ~/.kube/config. Host directories are never touched.
+      - k3d cluster delete {{.CLUSTER}}
+      - echo "==> Deleted. ~/.local/share/sizjobs is kept; task dev:up creates a fresh cluster."
+
+  dev:status:
+    desc: Show the cluster, its node, and CPU and memory use
+    preconditions: *dev_preconditions
+    cmds:
+      - echo "==> k3d clusters"
+      - k3d cluster list
+      - |
+        # .State.Status is "running", "exited", ... ; empty if no container.
+        state=$(docker inspect -f '{{"{{"}}.State.Status{{"}}"}}' {{.SERVER_CONTAINER}} 2>/dev/null || true)
+        if [ "$state" != running ]; then
+          echo "==> Cluster {{.CLUSTER}} is not running (${state:-not created}). task dev:up starts it."
+          exit 0
+        fi
+        echo "==> Nodes"
+        kubectl --context {{.KCTX}} get nodes -o wide
+        echo "==> Node usage (from metrics-server)"
+        # metrics-server needs about a minute after a start before it has
+        # numbers, so do not fail the task on that.
+        kubectl --context {{.KCTX}} top nodes \
+          || echo "    No metrics yet. metrics-server needs about a minute after a start."
+        echo "==> k3d containers (MEM LIMIT of the node is the cluster's cap)"
+        # Every k3d container, node and registry alike, has the label app=k3d.
+        # --no-stream: take one sample and exit instead of a live view.
+        docker stats --no-stream \
+          --format 'table {{"{{"}}.Name{{"}}"}}\t{{"{{"}}.CPUPerc{{"}}"}}\t{{"{{"}}.MemUsage{{"}}"}}\t{{"{{"}}.MemPerc{{"}}"}}' \
+          $(docker ps --filter label=app=k3d --format '{{"{{"}}.Names{{"}}"}}')
 
   cluster:start:
     internal: true
     cmds:
       - |
+        # .State.Status of the server container: "running", "exited", ...
+        # Empty when the container does not exist.
+        state=$(docker inspect -f '{{"{{"}}.State.Status{{"}}"}}' {{.SERVER_CONTAINER}} 2>/dev/null || true)
         # `k3d cluster get` exits non-zero when the cluster does not exist.
-        if k3d cluster get {{.CLUSTER}} >/dev/null 2>&1; then
-          echo "==> Cluster {{.CLUSTER}} exists, starting it (no-op if it is running)"
-          k3d cluster start {{.CLUSTER}}
-        else
+        if ! k3d cluster get {{.CLUSTER}} >/dev/null 2>&1; then
           echo "==> Creating cluster {{.CLUSTER}} from {{.K3D_CONFIG}}"
           # Host directories mounted by the k3d config: persistent volumes
           # and registry images. Created here so Docker does not create
@@ -185,10 +252,37 @@ tasks:
           # Passing the name on the command line overrides metadata.name in
           # the config file, so CLUSTER here is always the real name.
           k3d cluster create {{.CLUSTER}} --config {{.K3D_CONFIG}}
+        elif [ "$state" = running ]; then
+          echo "==> Cluster {{.CLUSTER}} is already running"
+          # The registry is a separate container; start it in case it was
+          # stopped by hand. A no-op when it is running.
+          docker start {{.REGISTRY_CONTAINER}} >/dev/null \
+            || echo "==> WARNING: registry {{.REGISTRY_CONTAINER}} is missing. task dev:delete, then task dev:up, re-creates it."
+        else
+          echo "==> Cluster {{.CLUSTER}} exists but is stopped, starting it"
+          # Starts the node and registry containers again, same data.
+          k3d cluster start {{.CLUSTER}}
         fi
-      - echo "==> Waiting for the node to be Ready"
-      - kubectl --context {{.KCTX}} wait --for=condition=Ready nodes --all --timeout=180s
+      - |
+        echo "==> Waiting for the node to be Ready"
+        # Right after a create the Node object may not exist yet, and
+        # `kubectl wait --all` fails on zero matches, so wait for it first.
+        for i in $(seq 1 60); do
+          [ -n "$(kubectl --context {{.KCTX}} get nodes -o name 2>/dev/null)" ] && break
+          sleep 2
+        done
+        kubectl --context {{.KCTX}} wait --for=condition=Ready nodes --all --timeout=180s
+      - |
+        echo "==> Waiting for k3s's add-ons (CoreDNS, metrics-server, local-path)"
+        # Not `kubectl wait --for=condition=Available`: these Deployments
+        # set maxUnavailable: 1 with one replica, so they count as
+        # "Available" with zero pods ready. `rollout status` waits until
+        # every replica is up.
+        for d in $(kubectl --context {{.KCTX}} -n kube-system get deployments -o name); do
+          kubectl --context {{.KCTX}} -n kube-system rollout status "$d" --timeout=180s
+        done
 
+  # Not called yet. a2-2 adds them back to dev:up (see the TODO there).
   argocd:install:
     internal: true
     cmds:

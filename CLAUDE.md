@@ -5,6 +5,7 @@ Part B (later): the same platform on k3s in AWS eu-central-1, destroyed every ev
 
 ## Layout
 - platform/: ArgoCD app-of-apps and Helm values (local values, plus values-aws in Part B)
+- k3d/: the local k3d cluster config (Part A)
 - services/: agent, mcp-tools (Python, uv)
 - evals/: promptfoo configs and golden dataset
 - infra/persistent, infra/ephemeral: Terraform, Part B only
