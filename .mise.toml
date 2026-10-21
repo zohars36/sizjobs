@@ -26,10 +26,10 @@ kubectl = "1.36.5"
 # Installs Helm charts by hand while debugging; ArgoCD renders them in-cluster.
 helm = "4.3.1"
 
-# ArgoCD CLI: inspect and sync apps (`argocd app list --core` talks to the
-# cluster through kubectl's context, no login needed). Matches the ArgoCD
-# version the argo-cd Helm chart installs: chart 10.10.5 ships v3.5.5
-# (ARGOCD_CHART_VERSION in Taskfile.yml). Bump both together.
+# ArgoCD CLI, for debugging apps (diff, manifests, history). Matches the
+# ArgoCD version the argo-cd Helm chart installs: chart 10.10.5 ships
+# v3.5.5 (ARGOCD_CHART_VERSION in Taskfile.yml). Bump both together.
+# Everyday status: `task argocd:status`, which needs no CLI login.
 argocd = "3.5.5"
 
 # Runs k3s inside Docker for the local cluster (Part A).

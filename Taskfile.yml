@@ -362,13 +362,15 @@ tasks:
       - kubectl --context {{.KCTX}} -n {{.ARGOCD_NAMESPACE}} port-forward svc/argocd-server 8080:80
 
   argocd:status:
-    desc: List ArgoCD Applications with their sync wave, sync status, health and revision
+    desc: List ArgoCD Applications with their sync wave, sync status, health and revisions
     cmds:
       # custom-columns picks fields from each Application. Dots in the
-      # annotation name are escaped with a backslash.
+      # annotation name are escaped with a backslash. A single-source app
+      # reports .status.sync.revision; one with several sources (demo:
+      # chart + values) reports a list in .status.sync.revisions instead.
       - >-
         kubectl --context {{.KCTX}} -n {{.ARGOCD_NAMESPACE}} get applications.argoproj.io
-        -o custom-columns='NAME:.metadata.name,WAVE:.metadata.annotations.argocd\.argoproj\.io/sync-wave,SYNC:.status.sync.status,HEALTH:.status.health.status,REVISION:.status.sync.revision'
+        -o custom-columns='NAME:.metadata.name,WAVE:.metadata.annotations.argocd\.argoproj\.io/sync-wave,SYNC:.status.sync.status,HEALTH:.status.health.status,REVISION:.status.sync.revision,MULTI-SOURCE REVISIONS:.status.sync.revisions'
 
   build:
     desc: Build every service image and push it to the local k3d registry

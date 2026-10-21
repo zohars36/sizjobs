@@ -21,8 +21,9 @@ Every workload sets memory requests and limits: the cluster has 7 GiB.
 3. The root renders `platform/apps` with `revision` set to the same branch,
    so every child Application reads this repo at that branch too
    ([ADR 0005](../docs/adr/0005-one-revision-for-app-of-apps.md)).
-4. ArgoCD polls git about every 3 minutes and syncs. To sync now:
-   `argocd app sync root --core` or the UI (`task argocd:ui`).
+4. ArgoCD polls git about every 3 minutes and syncs. To sync now, open
+   the UI (`task argocd:ui`) and press Refresh on the root app.
+   `task argocd:status` shows where every app stands.
 
 Never `kubectl apply`, `edit` or `delete` resources ArgoCD manages:
 selfHeal reverts the change within seconds.

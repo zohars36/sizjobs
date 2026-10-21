@@ -9,7 +9,8 @@
 #
 # Goal: the smallest ArgoCD that still has the UI. The cluster has 7 GiB for
 # everything, so components we do not use are off, and every container has
-# memory requests and limits. Steady-state limits add up to about 600Mi.
+# memory requests and limits. The four long-running pods request 256Mi and
+# are limited to 640Mi in total; measured use with two apps is about 200Mi.
 
 configs:
   # argocd-cmd-params-cm: command-line flags for the ArgoCD components.
