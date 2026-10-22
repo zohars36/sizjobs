@@ -1,7 +1,7 @@
 # Shortcuts for everyday sizjobs commands, run with go-task (https://taskfile.dev).
 #
 #   task --list    show every task with its description
-#   task dev:up    bring up the local k3d cluster (ArgoCD follows in a2-2)
+#   task dev:up    bring up the local k3d cluster, ArgoCD and the app-of-apps
 #
 # Tools come from .mise.toml, so run `mise install` first.
 #
