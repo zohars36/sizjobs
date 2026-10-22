@@ -356,7 +356,10 @@ tasks:
     cmds:
       - echo "==> ArgoCD UI at http://localhost:8080 (user admin). Ctrl+C stops the port-forward."
       # The password is a Secret; this prints the command, never the value.
-      - echo "    Password    kubectl --context {{.KCTX}} -n {{.ARGOCD_NAMESPACE}} get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+      # `argocd admin` reads the Secret through the current kubectl context.
+      - echo "    Password    argocd admin initial-password -n {{.ARGOCD_NAMESPACE}}"
+      - echo "    Then change it in the UI (User Info, Update Password) and delete the initial one:"
+      - echo "                kubectl --context {{.KCTX}} -n {{.ARGOCD_NAMESPACE}} delete secret argocd-initial-admin-secret"
       # Port 80: argocd-server serves plain HTTP (server.insecure in
       # platform/bootstrap/argocd-values.yaml).
       - kubectl --context {{.KCTX}} -n {{.ARGOCD_NAMESPACE}} port-forward svc/argocd-server 8080:80

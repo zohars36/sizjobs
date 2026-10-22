@@ -28,6 +28,42 @@ Every workload sets memory requests and limits: the cluster has 7 GiB.
 Never `kubectl apply`, `edit` or `delete` resources ArgoCD manages:
 selfHeal reverts the change within seconds.
 
+## UI and CLI
+
+`task argocd:status` needs no login: it reads the Application resources
+with kubectl (`kubectl get applications -n argocd`).
+
+**UI.** `task argocd:ui` port-forwards to http://localhost:8080. Log in as
+`admin` with the password from `argocd admin initial-password -n argocd`.
+Then change it in the UI (User Info → Update Password) and delete the
+initial one, which is no longer needed:
+`kubectl -n argocd delete secret argocd-initial-admin-secret`.
+The Secret is not managed by ArgoCD; it was created by the Helm install.
+
+**CLI, daily use: core mode.** No port-forward and no password: the CLI
+reads and writes the Application resources itself through your kubeconfig,
+with the permissions of your kubectl context.
+
+```sh
+kubectl config use-context k3d-sizjobs
+# Core mode looks for Applications in the context's default namespace.
+kubectl config set-context --current --namespace=argocd
+argocd login --core
+argocd app list
+argocd app diff demo
+```
+
+**CLI through the port-forward.** Only needed for what goes through the
+API server, such as testing logins or RBAC. With `task argocd:ui` running
+in another terminal:
+
+```sh
+# --grpc-web: the CLI normally speaks plain gRPC; through a port-forward
+#   to an HTTP (server.insecure) server only gRPC-Web over HTTP/1.1 works.
+# --plaintext: the server serves HTTP, not TLS.
+argocd login localhost:8080 --grpc-web --plaintext --username admin
+```
+
 ## Adding an app
 
 Copy `apps/templates/demo.yaml` and change the name, source, namespace and
