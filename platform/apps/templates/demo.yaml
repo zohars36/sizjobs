@@ -1,0 +1,50 @@
+# Demo app: podinfo, a tiny web service, to prove the GitOps flow end to
+# end (git -> root app -> this Application -> pods in namespace demo).
+#
+# Two sources: the upstream podinfo chart, and this repo for its values.
+# The values come from the same revision as the rest of the tree, so the
+# demo also proves that a branch reaches the children.
+#
+# The Helm template expressions are in quotes so this file stays valid
+# YAML for check-yaml and Renovate (which bumps the chart version below).
+# Comments must not contain double curly braces: Helm parses them too.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo
+  namespace: argocd
+  annotations:
+    # Workloads go in wave 1 and later; see platform/README.md.
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    # When this Application is deleted (or pruned from git), delete the
+    # resources it created as well, instead of leaving them behind.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://stefanprodan.github.io/podinfo
+      chart: podinfo
+      targetRevision: 6.15.0
+      helm:
+        releaseName: podinfo
+        # $values is the second source below (ref: values).
+        valueFiles:
+          - $values/platform/demo/values.yaml
+    - repoURL: "{{ .Values.repoURL }}"
+      targetRevision: "{{ .Values.revision }}"
+      # Not deployed itself; only gives the first source a $values path.
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo
+  syncPolicy:
+    automated:
+      # Delete resources that were removed from git.
+      prune: true
+      # Undo changes made in the cluster outside git.
+      selfHeal: true
+    syncOptions:
+      # Create namespace demo if it does not exist.
+      - CreateNamespace=true

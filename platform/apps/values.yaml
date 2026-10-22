@@ -1,0 +1,9 @@
+# Set by the root Application (platform/root-app.yaml) from its own source,
+# so in the cluster these defaults are always overridden. They only matter
+# for `helm template platform/apps` by hand.
+
+# Git revision (branch, tag or commit) every child reads this repo at.
+revision: main
+
+# This repo. Children that take files from it (values, manifests) use it.
+repoURL: https://github.com/zohars36/sizjobs

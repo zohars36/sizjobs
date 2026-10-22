@@ -93,7 +93,19 @@ task dev:down     # evening: stop it and free its RAM; nothing is lost
 
 `task dev:up` is safe to repeat: it creates the cluster if it does not
 exist, starts it if it is stopped, and only says so if it is running. It
-switches kubectl to the `k3d-sizjobs` context in `~/.kube/config`.
+switches kubectl to the `k3d-sizjobs` context in `~/.kube/config`. Then it
+installs or upgrades ArgoCD, points the app-of-apps at your current branch
+(which must be pushed: ArgoCD reads GitHub, not your working copy), and
+runs `task secrets` if `~/.config/sizjobs/.env` exists.
+
+```bash
+task argocd:ui       # UI on http://localhost:8080 (port-forward, Ctrl+C to stop)
+task argocd:status   # every Application with its sync wave, sync and health
+```
+
+Everything in the cluster comes from `platform/` through ArgoCD; see
+[platform/README.md](platform/README.md). Change it in git, not with
+`kubectl apply`: ArgoCD reverts manual changes.
 
 ### Pushing an image
 

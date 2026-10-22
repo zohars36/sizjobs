@@ -1,0 +1,26 @@
+# Values for the podinfo demo (platform/apps/templates/demo.yaml).
+# Chart defaults: `helm show values podinfo --repo https://stefanprodan.github.io/podinfo`
+
+replicaCount: 2
+
+resources:
+  requests:
+    cpu: 1m
+    memory: 16Mi
+  limits:
+    memory: 64Mi
+
+# Runs under the Pod Security "restricted" profile that a2-5 turns on.
+podSecurityContext:
+  # The image's user is the name "app"; Kubernetes can only verify
+  # runAsNonRoot with a numeric UID, so give the UID explicitly.
+  runAsNonRoot: true
+  runAsUser: 100
+  # Default syscall filter of the container runtime.
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]

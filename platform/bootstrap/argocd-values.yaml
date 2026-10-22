@@ -1,0 +1,123 @@
+# Helm values for ArgoCD, installed by `task dev:up` (bootstrap: ArgoCD
+# cannot install itself, so Helm does it once, then ArgoCD manages the rest).
+# Chart: argo-cd from https://argoproj.github.io/argo-helm (version pinned in
+# Taskfile.yml). The full list of values: `helm show values argo-cd --repo
+# https://argoproj.github.io/argo-helm --version <version>`.
+#
+# Nothing here is k3d-specific: the EC2 k3s cluster in Part B uses the
+# same file.
+#
+# Goal: the smallest ArgoCD that still has the UI. The cluster has 7 GiB for
+# everything, so components we do not use are off, and every container has
+# memory requests and limits. The four long-running pods request 256Mi and
+# are limited to 640Mi in total; measured use with two apps is about 200Mi.
+
+configs:
+  # argocd-cmd-params-cm: command-line flags for the ArgoCD components.
+  params:
+    # Serve the API and UI over plain HTTP. Nothing reaches argocd-server
+    # except `kubectl port-forward` (task argocd:ui), which is already an
+    # authenticated tunnel, so ArgoCD's self-signed TLS would only add
+    # browser warnings.
+    server.insecure: true
+
+  # argocd-cm: ArgoCD's main settings.
+  cm:
+    # Health check for Application resources. ArgoCD dropped the built-in
+    # one in v1.8, so without this an app-of-apps treats every child
+    # Application as healthy the moment it exists, and the sync waves in
+    # platform/apps (see platform/README.md) would not wait for a wave's
+    # apps to be healthy before starting the next. Lua, from the ArgoCD
+    # docs ("Sync waves" with app of apps).
+    resource.customizations.health.argoproj.io_Application: |
+      hs = {}
+      hs.status = "Progressing"
+      hs.message = ""
+      if obj.status ~= nil then
+        if obj.status.health ~= nil then
+          hs.status = obj.status.health.status
+          if obj.status.health.message ~= nil then
+            hs.message = obj.status.health.message
+          end
+        end
+      end
+      return hs
+
+# Dex is the bundled SSO server. We log in as the local admin user.
+dex:
+  enabled: false
+
+# Notifications (Slack, email on sync events). Not needed; alerts come later.
+notifications:
+  enabled: false
+
+# The ApplicationSet controller generates Applications from templates.
+# The app-of-apps pattern uses plain Applications. The chart has no
+# "enabled" switch for it, so run zero replicas.
+applicationSet:
+  replicas: 0
+  # Set anyway, so scaling it up later cannot run it unbounded.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 64Mi
+
+# Reconciles Applications against the cluster. The largest component; its
+# memory grows with the number of resources it watches.
+controller:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+# Clones the repo and renders Helm charts into manifests. Memory peaks
+# while `helm template` runs.
+repoServer:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      memory: 192Mi
+  # Init container that copies the argocd binary into the pod.
+  copyutil:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        memory: 32Mi
+
+# API and web UI.
+server:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 48Mi
+    limits:
+      memory: 128Mi
+
+# Cache for rendered manifests and cluster state.
+redis:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      memory: 64Mi
+
+# One-off Job that generates the Redis password Secret.
+redisSecretInit:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      memory: 32Mi
+
+# No CPU limits anywhere: a CPU limit throttles a pod even when the node is
+# idle, which mostly slows syncs down. Memory limits are what protect WSL.

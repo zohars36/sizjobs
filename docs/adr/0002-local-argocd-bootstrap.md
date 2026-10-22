@@ -24,7 +24,7 @@ the local working copy.
 
 We will install ArgoCD with Helm from `task dev:up`, using the official
 `argo-cd` chart at a version pinned in `Taskfile.yml` (bumped by Renovate)
-and the values in `platform/argocd/values-local.yaml`: Dex, notifications
+and the values in `platform/bootstrap/argocd-values.yaml`: Dex, notifications
 and the ApplicationSet controller are off, and every container has memory
 requests and limits.
 
@@ -35,10 +35,11 @@ requests and limits.
 ## Consequences
 
 - ArgoCD syncs what is pushed to GitHub, not local edits. `task dev:up`
-  warns when the branch is missing on origin or has unpushed commits.
-- Branch testing reaches the child Applications only if a2-2 passes the
-  root's revision down to them (for example as a Helm value), rather than
-  hard-coding `main` in each one.
+  fails when the branch is missing on origin, and warns when it differs
+  from the local HEAD.
+- Branch testing reaches the child Applications because the root passes
+  its revision down to them as a Helm value
+  ([ADR 0005](0005-one-revision-for-app-of-apps.md)).
 - ArgoCD is installed outside GitOps, so its own upgrades go through the
   Taskfile, not through a sync. Making ArgoCD manage itself can come later.
 - The chart version lives in the Taskfile; Renovate needs the custom regex

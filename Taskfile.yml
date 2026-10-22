@@ -1,7 +1,7 @@
 # Shortcuts for everyday sizjobs commands, run with go-task (https://taskfile.dev).
 #
 #   task --list    show every task with its description
-#   task dev:up    bring up the local k3d cluster (ArgoCD follows in a2-2)
+#   task dev:up    bring up the local k3d cluster, ArgoCD and the app-of-apps
 #
 # Tools come from .mise.toml, so run `mise install` first.
 #
@@ -31,7 +31,7 @@ vars:
   ARGOCD_NAMESPACE: argocd
   # renovate: datasource=helm depName=argo-cd registryUrl=https://argoproj.github.io/argo-helm
   ARGOCD_CHART_VERSION: "10.10.5"
-  ARGOCD_VALUES: platform/argocd/values-local.yaml
+  ARGOCD_VALUES: platform/bootstrap/argocd-values.yaml
   # The root Application of the app-of-apps (a2-2).
   ROOT_APP: platform/root-app.yaml
   BRANCH:
@@ -163,7 +163,7 @@ tasks:
   # ---------------------------------------------------------------------------
 
   dev:up:
-    desc: Create or start the k3d cluster (safe to run any number of times) and wait until it is Ready
+    desc: Bring up the cluster, install ArgoCD, point the app-of-apps at the current branch, load Secrets (safe to repeat)
     # The YAML anchor (&dev_preconditions) lets the other dev:* tasks reuse
     # this list with *dev_preconditions. Task itself never sees the anchor.
     preconditions: &dev_preconditions
@@ -179,12 +179,20 @@ tasks:
         msg: "{{.K3D_CONFIG}} not found. Run task from the repo root."
     cmds:
       - task: cluster:start
-      # TODO(a2-2): install ArgoCD and apply the root app here:
-      #   - task: argocd:install
-      #   - task: argocd:root
-      # and restore the detached-HEAD precondition (ArgoCD tracks a branch).
-      - echo "==> TODO(a2-2) ArgoCD is not installed yet; the cluster is empty apart from k3s's own add-ons."
-      - echo "==> Cluster {{.CLUSTER}} is up. kubectl context {{.KCTX}}, registry {{.REGISTRY}}."
+      - task: argocd:install
+      - task: argocd:root
+      - |
+        # Secrets are not in git, so ArgoCD cannot create them. Load them
+        # from the local .env when there is one; skip quietly otherwise.
+        if [ -f "$HOME/.config/sizjobs/.env" ]; then
+          # TASK_EXE is the path of the running task binary.
+          "{{.TASK_EXE}}" secrets
+        else
+          echo "==> No ~/.config/sizjobs/.env, skipping task secrets"
+        fi
+      - echo "==> Up on branch {{.BRANCH}}. kubectl context {{.KCTX}}, registry {{.REGISTRY}}."
+      - echo "    ArgoCD UI    task argocd:ui      (http://localhost:8080, user admin)"
+      - echo "    Apps         task argocd:status"
 
   dev:down:
     desc: Stop the k3d cluster, keeping its data for the next dev:up
@@ -282,17 +290,21 @@ tasks:
           kubectl --context {{.KCTX}} -n kube-system rollout status "$d" --timeout=180s
         done
 
-  # Not called yet. a2-2 adds them back to dev:up (see the TODO there).
+  # ArgoCD bootstrap (a2-2). Helm installs ArgoCD itself; after that,
+  # everything in the cluster comes from git through the root Application.
+  # See docs/adr/0002-local-argocd-bootstrap.md.
   argocd:install:
     internal: true
     cmds:
-      - echo "==> Installing ArgoCD (Helm chart argo-cd {{.ARGOCD_CHART_VERSION}}) in namespace {{.ARGOCD_NAMESPACE}}"
+      - echo "==> Installing or upgrading ArgoCD (Helm chart argo-cd {{.ARGOCD_CHART_VERSION}}) in namespace {{.ARGOCD_NAMESPACE}}"
       # upgrade --install: installs the first time, upgrades in place after,
       #   so dev:up can be run any number of times.
       # --wait: Helm 4 waits only for hooks by default; bare --wait waits
       #   until every Deployment is ready (the "watcher" strategy).
       # --history-max 3: each dev:up adds a Helm revision, stored as a
       #   Secret in the cluster; keep only the last three.
+      # --hide-notes: the chart's notes describe the HTTPS port-forward;
+      #   we serve HTTP, so they would only mislead. task argocd:ui instead.
       - >-
         helm upgrade --install argocd argo-cd
         --repo https://argoproj.github.io/argo-helm
@@ -301,28 +313,67 @@ tasks:
         --namespace {{.ARGOCD_NAMESPACE}} --create-namespace
         --values {{.ARGOCD_VALUES}}
         --history-max 3
+        --hide-notes
         --wait --timeout 5m
 
   argocd:root:
     internal: true
+    preconditions:
+      - sh: test "{{.BRANCH}}" != "HEAD"
+        msg: "Detached HEAD. Check out a branch: ArgoCD tracks a branch, not a commit."
     cmds:
       - |
-        if [ ! -f {{.ROOT_APP}} ]; then
-          echo "==> {{.ROOT_APP}} not found (added in a2-2). ArgoCD is installed but has nothing to sync yet."
-          exit 0
+        # ArgoCD clones from GitHub, not from this working copy, so it only
+        # sees what is pushed. ls-remote asks origin directly (no fetch);
+        # the first field of its output is the commit the branch points to.
+        remote=$(git ls-remote --heads origin refs/heads/{{.BRANCH}} | cut -f1)
+        if [ -z "$remote" ]; then
+          echo "==> Branch {{.BRANCH}} is not on origin, so ArgoCD cannot sync it."
+          echo "    Push it first: git push -u origin {{.BRANCH}}"
+          exit 1
         fi
-        # ArgoCD pulls from GitHub, not from this working copy, so it only
-        # sees commits that are pushed.
-        if ! git ls-remote --exit-code --heads origin {{.BRANCH}} >/dev/null 2>&1; then
-          echo "==> WARNING: branch {{.BRANCH}} is not on origin. Push it, or ArgoCD cannot sync."
-        elif [ -n "$(git log --oneline origin/{{.BRANCH}}..HEAD 2>/dev/null)" ]; then
-          echo "==> WARNING: {{.BRANCH}} has unpushed commits. ArgoCD syncs what is on origin."
+        if [ "$remote" != "$(git rev-parse HEAD)" ]; then
+          echo "==> WARNING: origin/{{.BRANCH}} is at ${remote:0:7}, your HEAD is at $(git rev-parse --short HEAD). ArgoCD syncs origin."
         fi
+        if ! git diff --quiet HEAD; then
+          echo "==> WARNING: uncommitted changes. ArgoCD only sees what is committed and pushed."
+        fi
+      - |
         echo "==> Applying {{.ROOT_APP}} with targetRevision {{.BRANCH}}"
-        # The file targets main (what the EC2 cluster runs). Locally we swap
-        # every targetRevision for the current branch before applying.
-        sed -E 's#^( *targetRevision:).*#\1 {{.BRANCH}}#' {{.ROOT_APP}} \
-          | kubectl --context {{.KCTX}} apply -f -
+        # The file in git targets main (what EC2 runs). Swap its one
+        # targetRevision for the current branch; the root passes it on to
+        # every child (docs/adr/0005-one-revision-for-app-of-apps.md).
+        manifest=$(sed -E 's#^( *targetRevision:).*#\1 {{.BRANCH}}#' {{.ROOT_APP}})
+        # Guard against the sed silently matching nothing.
+        if ! echo "$manifest" | grep -q "targetRevision: {{.BRANCH}}$"; then
+          echo "==> Could not set targetRevision in {{.ROOT_APP}}."
+          exit 1
+        fi
+        echo "$manifest" | kubectl --context {{.KCTX}} apply -f -
+
+  argocd:ui:
+    desc: Open the ArgoCD UI on http://localhost:8080 (port-forward; Ctrl+C to stop)
+    cmds:
+      - echo "==> ArgoCD UI at http://localhost:8080 (user admin). Ctrl+C stops the port-forward."
+      # The password is a Secret; this prints the command, never the value.
+      # `argocd admin` reads the Secret through the current kubectl context.
+      - echo "    Password    argocd admin initial-password -n {{.ARGOCD_NAMESPACE}}"
+      - echo "    Then change it in the UI (User Info, Update Password) and delete the initial one:"
+      - echo "                kubectl --context {{.KCTX}} -n {{.ARGOCD_NAMESPACE}} delete secret argocd-initial-admin-secret"
+      # Port 80: argocd-server serves plain HTTP (server.insecure in
+      # platform/bootstrap/argocd-values.yaml).
+      - kubectl --context {{.KCTX}} -n {{.ARGOCD_NAMESPACE}} port-forward svc/argocd-server 8080:80
+
+  argocd:status:
+    desc: List ArgoCD Applications with their sync wave, sync status, health and revisions
+    cmds:
+      # custom-columns picks fields from each Application. Dots in the
+      # annotation name are escaped with a backslash. A single-source app
+      # reports .status.sync.revision; one with several sources (demo:
+      # chart + values) reports a list in .status.sync.revisions instead.
+      - >-
+        kubectl --context {{.KCTX}} -n {{.ARGOCD_NAMESPACE}} get applications.argoproj.io
+        -o custom-columns='NAME:.metadata.name,WAVE:.metadata.annotations.argocd\.argoproj\.io/sync-wave,SYNC:.status.sync.status,HEALTH:.status.health.status,REVISION:.status.sync.revision,MULTI-SOURCE REVISIONS:.status.sync.revisions'
 
   build:
     desc: Build every service image and push it to the local k3d registry

@@ -6,6 +6,7 @@
   "labels": ["dependencies"],
   "prConcurrentLimit": 5,
   "pre-commit": { "enabled": true },
+  "argocd": { "managerFilePatterns": ["/^platform/.+\\.ya?ml$/"] },
   "customManagers": [
     {
       "customType": "regex",
