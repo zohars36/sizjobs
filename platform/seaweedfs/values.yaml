@@ -40,8 +40,8 @@ allInOne:
   # stray pod is left over, so drop it.
   affinity: ""
 
-  # Measured idle: about 60Mi. The filer's leveldb and the S3 gateway's
-  # buffers grow during uploads, hence the headroom below the limit.
+  # Measured idle with two empty buckets: about 30Mi. The filer's leveldb
+  # and the S3 gateway's buffers grow during uploads, hence the headroom.
   resources:
     requests:
       cpu: 20m

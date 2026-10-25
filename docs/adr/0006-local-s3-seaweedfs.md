@@ -57,7 +57,7 @@ Apps use only the S3 API, never SeaweedFS's filer or master APIs.
 
 ## Consequences
 
-- The store idles at about 60Mi in one pod, instead of four pods in the
+- The store idles at about 30Mi in one pod, instead of four pods in the
   chart's split mode. There is no redundancy, which a single-node cluster
   does not have anyway.
 - Part B swaps the endpoint in `s3-config` for AWS S3 and replaces the
