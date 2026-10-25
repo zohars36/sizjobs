@@ -64,13 +64,14 @@ secrets.yaml
 # is committed instead so the build is reproducible.
 **/charts/*.tgz
 
-# --- MinIO (local stand-in for S3) --------------------------------
-# Local data directory if MinIO runs with a host bind mount, and the
-# `mc` client config, which stores access and secret keys.
-/minio-data/
+# --- S3 clients -------------------------------------------------
+# Config directories of S3 clients (MinIO's `mc`, `s3cmd`), which store
+# access and secret keys. The local S3 stand-in (SeaweedFS) keeps its data
+# in a PVC under ~/.local/share/sizjobs, outside the repo.
 .mc/
+.s3cfg
 
-# --- Personal data: lives in the private bucket (MinIO, later S3) --
+# --- Personal data: lives in the private bucket (SeaweedFS, later S3) --
 profile.yaml
 companies.yaml
 /private/

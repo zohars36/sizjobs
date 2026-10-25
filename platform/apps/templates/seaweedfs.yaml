@@ -1,0 +1,54 @@
+# SeaweedFS: the S3-compatible object store for Part A, in namespace data.
+# In Part B apps point at AWS S3 instead (s3-config ConfigMap); see
+# docs/adr/0006-local-s3-seaweedfs.md.
+#
+# Two sources: the upstream SeaweedFS chart, and this repo, which gives the
+# chart its values ($values) and adds the plain manifests in
+# platform/seaweedfs/manifests (S3 identities, s3-config, the bucket Job).
+#
+# Needs the "s3" Secret, created by `task secrets`. Until it exists the pod
+# waits in CreateContainerConfigError and the app shows Progressing.
+#
+# Comments must not contain double curly braces: Helm parses them too.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: seaweedfs
+  namespace: argocd
+  annotations:
+    # Infrastructure: wave 0; see platform/README.md.
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    # Deleting this Application deletes its resources too, PVC included.
+    # local-path's reclaim policy is Delete, so removing this app from git
+    # deletes the stored objects. (`task dev:delete` does not: it removes
+    # the cluster but never the host directory.)
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://seaweedfs.github.io/seaweedfs/helm
+      chart: seaweedfs
+      # 4.48.0 rather than the newest 4.50.0 (2026-10-25): let a release
+      # age about two weeks before taking it. Renovate bumps it.
+      targetRevision: 4.48.0
+      helm:
+        releaseName: seaweedfs
+        valueFiles:
+          - $values/platform/seaweedfs/values.yaml
+    - repoURL: "{{ .Values.repoURL }}"
+      targetRevision: "{{ .Values.revision }}"
+      # This source does two jobs: `ref` names it $values for the chart
+      # above, and `path` deploys the manifests in that directory.
+      ref: values
+      path: platform/seaweedfs/manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: data
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,107 @@
+# Values for SeaweedFS, the local S3 stand-in (platform/apps/templates/seaweedfs.yaml).
+# Chart defaults: `helm show values seaweedfs --repo https://seaweedfs.github.io/seaweedfs/helm --version <version>`
+# Why SeaweedFS and not MinIO: docs/adr/0006-local-s3-seaweedfs.md.
+#
+# Shape: one all-in-one pod running `weed server`, which is master (volume
+# placement), volume server (blob storage), filer (names and directories)
+# and the S3 gateway in a single process. The chart's normal mode runs
+# those as three StatefulSets plus an S3 Deployment, each with its own
+# memory floor and Raft/gRPC chatter between them; for one laptop user that
+# is four pods doing the work of one. The trade-off is no high availability,
+# which a single-node cluster does not have anyway.
+
+allInOne:
+  enabled: true
+  # The pod holds a ReadWriteOnce volume: Recreate stops the old pod before
+  # starting the new one, so two pods never write the same data.
+  updateStrategy:
+    type: Recreate
+
+  s3:
+    enabled: true
+    # Require signed requests. Without this the gateway lets anyone in.
+    enableAuth: true
+    # The identities file. The chart's generated one adds a read-only user
+    # with random keys from Helm `lookup`, which ArgoCD does not support, so
+    # those keys (and the pod) would change on every render. This Secret,
+    # from platform/seaweedfs/manifests, holds only ${VAR} references.
+    existingConfigSecret: seaweedfs-s3-identities
+
+  data:
+    # A PVC from k3s's default StorageClass, local-path: the data lands in
+    # ~/.local/share/sizjobs/storage on the laptop (k3d/sizjobs.yaml) and
+    # survives `task dev:delete`.
+    type: persistentVolumeClaim
+    # local-path does not enforce sizes; this only documents the intent.
+    size: 5Gi
+
+  # The default is a required anti-affinity against other SeaweedFS pods.
+  # With Recreate and one replica it does nothing but block scheduling if a
+  # stray pod is left over, so drop it.
+  affinity: ""
+
+  # Measured idle: about 60Mi. The filer's leveldb and the S3 gateway's
+  # buffers grow during uploads, hence the headroom below the limit.
+  resources:
+    requests:
+      cpu: 20m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+  # Pod Security "restricted" (a2-5). The image runs as root by default;
+  # weed only needs to write /data, which local-path creates world-writable.
+  podSecurityContext:
+    # The chart only renders this block when enabled is true.
+    enabled: true
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    enabled: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: [ALL]
+
+s3:
+  # Where the gateway's admin identity comes from: the "s3" Secret created
+  # by `task secrets` (Part B: ExternalSecrets from SSM). The chart turns
+  # these into env vars SEAWEEDFS_S3_ADMIN_ACCESS_KEY_ID and
+  # SEAWEEDFS_S3_ADMIN_SECRET_ACCESS_KEY, which the identities file names.
+  credentials:
+    admin:
+      existingSecret: s3
+      accessKeyKey: S3_ACCESS_KEY
+      secretKeyKey: S3_SECRET_KEY
+
+master:
+  # Run inside the all-in-one pod, not as their own StatefulSets.
+  # allInOne.enabled does not switch these off by itself.
+  enabled: false
+  # Each volume file grows to at most this size before the master opens a
+  # new one. The default 1000 MB is sized for servers; small volumes keep
+  # disk use close to the data actually stored.
+  volumeSizeLimitMB: 256
+
+volume:
+  enabled: false
+  # The all-in-one pod reads maxVolumes from the first entry: 0 lets weed
+  # derive the limit from free disk. The default here is a hostPath under
+  # /ssd for the separate volume StatefulSet, which is off, so only
+  # maxVolumes matters.
+  dataDirs:
+    - name: data
+      type: emptyDir
+      maxVolumes: 0
+
+filer:
+  enabled: false
+
+global:
+  seaweedfs:
+    # The chart's ClusterRole grants create/delete on pods in every
+    # namespace, for a master migration step in the split mode. Nothing in
+    # the all-in-one pod uses it, and it is far more access than storage needs.
+    createClusterRole: false

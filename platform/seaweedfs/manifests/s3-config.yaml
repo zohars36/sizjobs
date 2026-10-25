@@ -1,0 +1,20 @@
+# Where to reach S3, for apps in the cluster. Not secret: the keys are in
+# the "s3" Secret. Apps load both with envFrom (configMapRef s3-config,
+# secretRef s3), so in Part B only these two values change, to AWS S3.
+#
+# A ConfigMap is only readable in its own namespace, like a Secret. An app
+# elsewhere that needs S3 gets its own copy of these two lines.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: s3-config
+  namespace: data
+data:
+  # The all-in-one Service of the SeaweedFS chart, S3 port. The short form
+  # seaweedfs-all-in-one.data works too; the full name works from any
+  # namespace and survives a changed DNS search path.
+  S3_ENDPOINT: http://seaweedfs-all-in-one.data.svc.cluster.local:8333
+  # SeaweedFS ignores the region, but S3 clients refuse to sign a request
+  # without one. us-east-1 is the AWS default, which every client accepts.
+  S3_REGION: us-east-1

@@ -1,0 +1,132 @@
+# Buckets as code: creates every bucket in BUCKETS that does not exist yet.
+# Safe to run any number of times; existing buckets and their objects are
+# left alone. Removing a name here does not delete the bucket.
+#
+# Talks to the S3 API with the keys from the "s3" Secret, the same way an
+# app would, so a successful run also proves the endpoint and keys work.
+#
+# An ArgoCD hook, not a plain Job:
+#   hook: Sync    runs during every sync of this Application, in wave order
+#                 with the regular resources (a PostSync hook would run only
+#                 after all of them).
+#   sync-wave 1   after wave 0, the chart's resources, which have no wave
+#                 annotation; ArgoCD waits until the Deployment is healthy.
+#   BeforeHookCreation  delete the previous run's Job right before the next
+#                 one, so the last run and its logs stay around until then.
+# A plain Job with ttlSecondsAfterFinished would not work here: once the TTL
+# deletes it, ArgoCD sees a resource missing from the cluster and selfHeal
+# creates it again, forever.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: create-buckets
+  namespace: data
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  # Retries after a failed pod, e.g. if the gateway is still starting.
+  backoffLimit: 3
+  # Give up after 5 minutes in total, so a broken sync does not hang.
+  activeDeadlineSeconds: 300
+  template:
+    spec:
+      restartPolicy: Never
+      # No Kubernetes API access needed: do not mount a token.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: aws
+          # Tag for readers, digest for what actually runs: a tag can be
+          # moved to another image, a digest cannot. Renovate bumps both.
+          image: amazon/aws-cli:2.38.1@sha256:733d5be1015825e4038c6016f3fa9954868ddee1f611b73be795a9cc2e706bfd
+          # The image's entrypoint is `aws`; run a shell instead.
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              echo "==> S3 endpoint $AWS_ENDPOINT_URL"
+              # The Deployment is Ready once the master answers; the S3
+              # gateway in the same process can take a few seconds more.
+              i=0
+              until aws s3api list-buckets >/dev/null 2>&1; do
+                i=$((i + 1))
+                if [ "$i" -ge 30 ]; then
+                  echo "==> S3 did not answer after 60s. Last error:"
+                  aws s3api list-buckets
+                  exit 1
+                fi
+                sleep 2
+              done
+              for bucket in $BUCKETS; do
+                # head-bucket succeeds only if the bucket exists and the
+                # keys may access it.
+                if aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
+                  echo "==> Bucket $bucket exists"
+                else
+                  echo "==> Creating bucket $bucket"
+                  aws s3api create-bucket --bucket "$bucket" >/dev/null
+                fi
+              done
+              echo "==> Buckets now:"
+              aws s3api list-buckets --query 'Buckets[].Name' --output text
+          env:
+            # Space-separated. backups: Postgres (CNPG) base backups and
+            # WAL; private: files that must never be in git, such as the
+            # profile and the company list.
+            - name: BUCKETS
+              value: backups private
+            # The AWS CLI reads the endpoint from this variable (CLI v2.13+),
+            # so no --endpoint-url on every call.
+            - name: AWS_ENDPOINT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: s3-config
+                  key: S3_ENDPOINT
+            - name: AWS_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: s3-config
+                  key: S3_REGION
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: s3
+                  key: S3_ACCESS_KEY
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: s3
+                  key: S3_SECRET_KEY
+            # The CLI writes a cache under $HOME; the root filesystem is
+            # read-only, so point it at the writable /tmp volume.
+            - name: HOME
+              value: /tmp
+            # Without a pager setting the CLI pipes long output to `less`,
+            # which is not in the image.
+            - name: AWS_PAGER
+              value: ""
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
