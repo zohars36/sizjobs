@@ -7,6 +7,7 @@
   "prConcurrentLimit": 5,
   "pre-commit": { "enabled": true },
   "argocd": { "managerFilePatterns": ["/^platform/.+\\.ya?ml$/"] },
+  "kubernetes": { "managerFilePatterns": ["/^platform/.+/manifests/.+\\.ya?ml$/"] },
   "customManagers": [
     {
       "customType": "regex",

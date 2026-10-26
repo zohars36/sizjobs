@@ -1,0 +1,37 @@
+# The S3 gateway's identities file (allInOne.s3.existingConfigSecret in
+# platform/seaweedfs/values.yaml). It holds no keys, only the names of two
+# env vars; SeaweedFS replaces each ${VAR} with the variable's value when it
+# loads the file, and the chart fills those variables from the "s3" Secret.
+# So this file is safe in a public repo, and rotating the keys means
+# changing the .env (or SSM), never git.
+#
+# A Secret rather than a ConfigMap only because the chart mounts it as one.
+#
+# One identity with full rights. Per-app identities with narrower actions
+# (e.g. Read and Write on one bucket) can be added here later; the actions
+# list is SeaweedFS's, see https://github.com/seaweedfs/seaweedfs/wiki/Amazon-S3-API.
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: seaweedfs-s3-identities
+  namespace: data
+type: Opaque
+stringData:
+  # The chart mounts the Secret at /etc/sw/s3 and passes this key's file
+  # to `weed server -s3.config`.
+  seaweedfs_s3_config: |
+    {
+      "identities": [
+        {
+          "name": "admin",
+          "credentials": [
+            {
+              "accessKey": "${SEAWEEDFS_S3_ADMIN_ACCESS_KEY_ID}",
+              "secretKey": "${SEAWEEDFS_S3_ADMIN_SECRET_ACCESS_KEY}"
+            }
+          ],
+          "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+        }
+      ]
+    }

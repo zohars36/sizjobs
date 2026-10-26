@@ -14,7 +14,7 @@ Part B (later): the same platform on k3s in AWS eu-central-1, destroyed every ev
 ## Rules
 - Code, comments, commits, issues and PRs are always in English.
 - Keep every workload small: memory requests and limits on everything; the laptop gives WSL 10GB.
-- Anything AWS-specific must have a local stand-in in Part A: MinIO for S3, the .env for SSM.
+- Anything AWS-specific must have a local stand-in in Part A: SeaweedFS for S3 (ADR 0006), the .env for SSM.
 - Images: public GHCR from main, signed with cosign; the k3d local registry only for quick branch iteration.
 - Never run terraform apply or destroy locally. CI applies on merge to main (Part B).
 - Tag every AWS resource project=sizjobs and layer=persistent|ephemeral.

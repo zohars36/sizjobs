@@ -8,8 +8,8 @@ Proposed
 
 ## Context
 
-Workloads need credentials: MinIO, the LLM gateway and Bedrock, Gmail,
-Telegram, Langfuse and Grafana Cloud. In Part A they come from
+Workloads need credentials: S3 (SeaweedFS locally), the LLM gateway and
+Bedrock, Gmail, Telegram, Langfuse and Grafana Cloud. In Part A they come from
 `~/.config/sizjobs/.env` on the laptop; in Part B from SSM through
 External Secrets. If the two paths produced different Secret names or
 keys, every workload would need per-environment configuration.
@@ -26,7 +26,7 @@ from the `.env` with it now; Part B will generate ExternalSecrets from the
 same file, reading SSM parameters `/sizjobs/<secret>/<KEY>`. Inside a
 Secret, keys keep their env var names.
 
-Secrets are split by who needs them: `data` (MinIO, next to Postgres),
+Secrets are split by who needs them: `data` (S3 keys, next to Postgres),
 `llm` (LiteLLM, Bedrock and Langfuse keys), `agents` (Gmail, Telegram) and
 `monitoring` (Grafana Cloud). The agent gets an LLM key from LiteLLM and
 never sees provider credentials.

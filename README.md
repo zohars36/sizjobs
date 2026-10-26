@@ -173,7 +173,7 @@ deletes its directory (the StorageClass reclaim policy is `Delete`).
 After `task dev:delete` the PVC directories stay on disk, but a
 re-created PVC has a new UID and gets a new, empty directory. To get old
 data back, copy it from the old directory into the new one. Postgres and
-MinIO get proper backups later; until then, treat cluster delete as losing
+SeaweedFS get proper backups later; until then, treat cluster delete as losing
 in-cluster state.
 
 ### Resetting

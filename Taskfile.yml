@@ -34,6 +34,10 @@ vars:
   ARGOCD_VALUES: platform/bootstrap/argocd-values.yaml
   # The root Application of the app-of-apps (a2-2).
   ROOT_APP: platform/root-app.yaml
+  # The SeaweedFS all-in-one Service (a2-3) and the laptop port task
+  # s3:forward uses. 8333 matches the in-cluster port, so URLs look alike.
+  S3_SERVICE: seaweedfs-all-in-one
+  S3_LOCAL_PORT: "8333"
   BRANCH:
     sh: git rev-parse --abbrev-ref HEAD
   # Image tag: short commit, plus "-dirty" when there are uncommitted
@@ -288,6 +292,68 @@ tasks:
         # every replica is up.
         for d in $(kubectl --context {{.KCTX}} -n kube-system get deployments -o name); do
           kubectl --context {{.KCTX}} -n kube-system rollout status "$d" --timeout=180s
+        done
+
+  # Local S3 (a2-3): SeaweedFS in namespace data, see platform/README.md.
+  # The S3 API is only reachable inside the cluster; s3:forward makes it
+  # reachable on the laptop for the aws CLI and other S3 clients.
+
+  s3:forward:
+    desc: Port-forward the in-cluster S3 API (SeaweedFS) to http://localhost:{{.S3_LOCAL_PORT}} (Ctrl+C to stop)
+    cmds:
+      - echo "==> S3 API at http://localhost:{{.S3_LOCAL_PORT}} (svc/{{.S3_SERVICE}} in namespace data). Ctrl+C stops the port-forward."
+      - echo "    List buckets and objects in another terminal  task s3:ls"
+      # port-forward listens on 127.0.0.1 only, so nothing else on the
+      # network can reach the store.
+      - kubectl --context {{.KCTX}} -n data port-forward svc/{{.S3_SERVICE}} {{.S3_LOCAL_PORT}}:8333
+
+  s3:ls:
+    desc: List the buckets and objects in local S3 through task s3:forward (keys from ~/.config/sizjobs/.env)
+    preconditions:
+      # Any HTTP answer will do (S3 answers 403 without keys); curl only
+      # fails when nothing listens. No -f, so a 403 counts as up.
+      - sh: curl -s -o /dev/null http://localhost:{{.S3_LOCAL_PORT}}/
+        msg: "Nothing on localhost:{{.S3_LOCAL_PORT}}. Run task s3:forward in another terminal first."
+      - sh: test -f "$HOME/.config/sizjobs/.env"
+        msg: "~/.config/sizjobs/.env not found. See .env.example."
+    cmds:
+      - |
+        env_file="$HOME/.config/sizjobs/.env"
+        # Read one key from the .env without sourcing it: sourcing would
+        # run the file as shell and put every secret in the environment.
+        # Strips one pair of quotes, like scripts/secrets_to_k8s.py.
+        env_value() {
+          sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$1[[:space:]]*=[[:space:]]*//p" "$env_file" \
+            | tail -n 1 | sed -e 's/[[:space:]]*$//' -e "s/^\"\(.*\)\"$/\1/" -e "s/^'\(.*\)'$/\1/"
+        }
+        # The keys go to aws only as environment variables, never as
+        # arguments (anyone on the machine can read those with ps) and
+        # never in the output.
+        AWS_ACCESS_KEY_ID=$(env_value S3_ACCESS_KEY)
+        AWS_SECRET_ACCESS_KEY=$(env_value S3_SECRET_KEY)
+        if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+          echo "==> S3_ACCESS_KEY or S3_SECRET_KEY is empty in $env_file."
+          exit 1
+        fi
+        export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+        # Keep a real AWS login out of this: an SSO session token or profile
+        # in the shell would otherwise be sent along with the local keys.
+        unset AWS_SESSION_TOKEN AWS_PROFILE
+        # The region is not checked locally, but the CLI needs one to sign.
+        export AWS_REGION=us-east-1 AWS_PAGER=""
+        s3() { aws --endpoint-url http://localhost:{{.S3_LOCAL_PORT}} s3 "$@"; }
+
+        echo "==> Buckets at http://localhost:{{.S3_LOCAL_PORT}}"
+        buckets=$(s3 ls | awk '{print $3}')
+        if [ -z "$buckets" ]; then
+          echo "    (none)"
+          exit 0
+        fi
+        echo "$buckets" | sed 's/^/    /'
+        for bucket in $buckets; do
+          echo "==> Objects in s3://$bucket"
+          # --summarize adds object count and total size at the end.
+          s3 ls "s3://$bucket" --recursive --human-readable --summarize | sed 's/^/    /'
         done
 
   # ArgoCD bootstrap (a2-2). Helm installs ArgoCD itself; after that,

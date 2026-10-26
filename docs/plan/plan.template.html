@@ -236,7 +236,7 @@ Part B (later): the same platform on k3s in AWS eu-central-1, destroyed every ev
 ## Rules
 - Code, comments, commits, issues and PRs are always in English.
 - Keep every workload small: memory requests and limits on everything; the laptop gives WSL 10GB.
-- Anything AWS-specific must have a local stand-in in Part A: MinIO for S3, the .env for SSM.
+- Anything AWS-specific must have a local stand-in in Part A: SeaweedFS for S3 (ADR 0006), the .env for SSM.
 - Images: public GHCR from main, signed with cosign; the k3d local registry only for quick branch iteration.
 - Never run terraform apply or destroy locally. CI applies on merge to main (Part B).
 - Tag every AWS resource project=sizjobs and layer=persistent|ephemeral.
@@ -295,7 +295,7 @@ flowchart LR
       job["Agent Job: Hermes + Chromium"] --> mcp2["MCP tools"]
       mcp2 --> pg2[("Postgres / CNPG")]
       job --> gw2["LiteLLM gateway"]
-      pg2 -->|backups| minio[("MinIO: backups, private profile")]
+      pg2 -->|backups| objstore[("SeaweedFS: backups, private profile")]
       alloy2["Grafana Alloy"]
     end
     ollama["Ollama, offline tests only"]
@@ -316,7 +316,7 @@ flowchart LR
         <thead><tr><th>Concern</th><th>Part A, local</th><th>Part B, AWS</th></tr></thead>
         <tbody>
           <tr><td>Cluster</td><td>k3d in WSL</td><td>k3s on a Spot EC2 instance</td></tr>
-          <tr><td>Object storage</td><td>MinIO</td><td>S3</td></tr>
+          <tr><td>Object storage</td><td>SeaweedFS</td><td>S3</td></tr>
           <tr><td>Secrets</td><td><code>.env</code> → <code>task secrets</code></td><td>SSM Parameter Store → External Secrets</td></tr>
           <tr><td>Images</td><td>Public GHCR, signed with cosign (k3d registry for branch builds)</td><td>The same GHCR images</td></tr>
           <tr><td>Main model</td><td>Bedrock through a scoped key</td><td>vLLM on a Spot GPU, Bedrock fallback through the instance role</td></tr>

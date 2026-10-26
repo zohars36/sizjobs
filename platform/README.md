@@ -10,6 +10,7 @@ platform/
   root-app.yaml                  the root Application, applied once by hand
   apps/                          Helm chart: one template per child Application
   <app>/values.yaml              values a child reads from this repo, e.g. demo/
+  <app>/manifests/               plain manifests a child deploys next to its chart, e.g. seaweedfs/
 ```
 
 Every workload sets memory requests and limits: the cluster has 7 GiB.
@@ -76,6 +77,37 @@ wave. Every child Application has:
 - a sync wave (below)
 - any source in this repo at `"{{ .Values.revision }}"`, never a fixed branch
 
+## S3 (SeaweedFS)
+
+Part A's stand-in for AWS S3 is SeaweedFS in namespace `data`
+([ADR 0006](../docs/adr/0006-local-s3-seaweedfs.md)). Inside the cluster
+the S3 API is at
+
+```
+http://seaweedfs-all-in-one.data.svc.cluster.local:8333
+```
+
+(Service `seaweedfs-all-in-one`, port 8333, plain HTTP; the region is not
+checked, use `us-east-1`). Apps do not hard-code this: they load the
+ConfigMap `s3-config` (`S3_ENDPOINT`, `S3_REGION`) and the Secret `s3`
+(`S3_ACCESS_KEY`, `S3_SECRET_KEY`), both in `data`:
+
+```yaml
+envFrom:
+  - configMapRef:
+      name: s3-config
+  - secretRef:
+      name: s3
+```
+
+In Part B the ConfigMap points at AWS S3 and the keys give way to an IAM
+role, so apps must use only the S3 API.
+
+Buckets (`backups`, `private`) are created by the `create-buckets` Job on
+every sync of the `seaweedfs` app; add a bucket by adding its name to
+`BUCKETS` in `seaweedfs/manifests/create-buckets.yaml`. From the laptop:
+`task s3:forward` in one terminal, `task s3:ls` in another.
+
 ## Sync waves
 
 The annotation `argocd.argoproj.io/sync-wave` orders the child
@@ -87,7 +119,7 @@ check in `bootstrap/argocd-values.yaml`).
 |---|---|---|
 | -2 | Namespaces and CRDs | namespaces with Pod Security labels (a2-5) |
 | -1 | Operators | CloudNativePG operator |
-| 0 | Infrastructure | MinIO, Postgres clusters, LiteLLM |
+| 0 | Infrastructure | SeaweedFS (S3), Postgres clusters, LiteLLM |
 | 1+ | Workloads | demo, the agent |
 
 Use the lowest wave that is still after everything the app needs.
