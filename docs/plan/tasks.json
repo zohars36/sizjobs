@@ -190,29 +190,29 @@
     },
     {
      "id": "a2-3",
-     "t": "MinIO as local S3",
-     "d": "MinIO in the cluster as a stand-in for S3: buckets for backups and private data. Code talks to it through the S3 API, so moving to AWS S3 in Part B is a config change.",
-     "ok": "CNPG backups and the private profile land in MinIO buckets.",
+     "t": "SeaweedFS as local S3",
+     "d": "SeaweedFS in the cluster as a stand-in for S3 (MinIO's community edition is archived, see ADR 0006): buckets for backups and private data. Code talks to it through the S3 API, so moving to AWS S3 in Part B is a config change.",
+     "ok": "The buckets backups and private are created from git, and the S3 endpoint (ConfigMap s3-config) and keys (Secret s3) work from inside the cluster.",
      "where": [
       "cc"
      ],
      "steps": [
-      "Install the `mc` client in WSL to inspect buckets: `mc alias set local http://localhost:9000 ...`."
+      "Inspect buckets from WSL: `task s3:forward` in one terminal, `task s3:ls` in another."
      ],
-     "prompt": "Deploy MinIO as an ArgoCD application with a persistent volume and small memory requests, create the buckets backups and private, and expose an S3 endpoint inside the cluster. Credentials come from the minio Secret created by task secrets."
+     "prompt": "Deploy SeaweedFS as an ArgoCD application with a persistent volume and small memory requests, create the buckets backups and private, and expose an S3 endpoint inside the cluster. Credentials come from the s3 Secret created by task secrets."
     },
     {
      "id": "a2-4",
      "t": "Postgres with CloudNativePG",
-     "d": "A single instance with scheduled backups to MinIO. On AWS the same backups go to S3, and every bring-up restores from the latest one. Used for agent results and LiteLLM.",
-     "ok": "Restoring from a MinIO backup into a freshly created cluster brings the data back.",
+     "d": "A single instance with scheduled backups to SeaweedFS. On AWS the same backups go to S3, and every bring-up restores from the latest one. Used for agent results and LiteLLM.",
+     "ok": "Restoring from a SeaweedFS backup into a freshly created cluster brings the data back.",
      "where": [
       "cc"
      ],
      "steps": [
       "This is the one stateful component, so test the backup and restore cycle before moving on."
      ],
-     "prompt": "Add the CloudNativePG operator and a single-instance Cluster jobs with backups and WAL archiving to the MinIO bucket backups through its S3-compatible endpoint, using the backup method currently recommended for the CNPG version you install, plus a ScheduledBackup. Support bootstrapping by recovery from the latest backup when one exists and by initdb otherwise, controlled by a value. Keep the bucket endpoint configurable so Part B can point it at S3. Create databases for the agent and for LiteLLM."
+     "prompt": "Add the CloudNativePG operator and a single-instance Cluster jobs with backups and WAL archiving to the SeaweedFS bucket backups through its S3-compatible endpoint, using the backup method currently recommended for the CNPG version you install, plus a ScheduledBackup. Support bootstrapping by recovery from the latest backup when one exists and by initdb otherwise, controlled by a value. Keep the bucket endpoint configurable so Part B can point it at S3. Create databases for the agent and for LiteLLM."
     },
     {
      "id": "a2-5",
@@ -377,17 +377,17 @@
     {
      "id": "a5-1",
      "t": "Private profile",
-     "d": "The profile from the defaults in the product description: target roles, must-haves, nice-to-haves and deal-breakers, no salary. The repo holds only an example; the real profile lives in the private bucket (MinIO now, S3 in Part B). The repo is public, so personal data never goes into git.",
+     "d": "The profile from the defaults in the product description: target roles, must-haves, nice-to-haves and deal-breakers, no salary. The repo holds only an example; the real profile lives in the private bucket (SeaweedFS now, S3 in Part B). The repo is public, so personal data never goes into git.",
      "ok": "The agent loads the profile from the private bucket, and git holds no personal detail.",
      "where": [
       "cc",
       "wsl"
      ],
      "steps": [
-      "Write `profile.yaml` outside the repo and upload it: `mc cp profile.yaml local/private/profile.yaml`",
+      "Write `profile.yaml` outside the repo and upload it: with `aws s3 cp profile.yaml s3://private/profile.yaml --endpoint-url http://localhost:8333` while `task s3:forward` runs",
       "Same for `companies.yaml` from a5-3."
      ],
-     "prompt": "Define a profile schema in services/agent/profile.example.yaml (target roles, must-haves, nice-to-haves, deal-breakers, location Israel only, no salary fields) and a loader that reads the real profile from the private bucket through the S3 API at startup, with the endpoint configurable for MinIO now and S3 later. The example is used only in tests. Make sure no real profile can be committed."
+     "prompt": "Define a profile schema in services/agent/profile.example.yaml (target roles, must-haves, nice-to-haves, deal-breakers, location Israel only, no salary fields) and a loader that reads the real profile from the private bucket through the S3 API at startup, with the endpoint configurable for SeaweedFS now and S3 later. The example is used only in tests. Make sure no real profile can be committed."
     },
     {
      "id": "a5-2",
@@ -977,8 +977,8 @@
    "tasks": [
     {
      "id": "b4-1",
-     "t": "Move storage from MinIO to S3",
-     "d": "Point CNPG backups, the profile and the company list at S3 instead of MinIO, and copy the existing data over once. MinIO stays for local development.",
+     "t": "Move storage from SeaweedFS to S3",
+     "d": "Point CNPG backups, the profile and the company list at S3 instead of SeaweedFS, and copy the existing data over once. SeaweedFS stays for local development.",
      "ok": "A bring-up on AWS restores yesterday's data from S3.",
      "where": [
       "cc"
@@ -986,7 +986,7 @@
      "steps": [
       "Run the copy once with the Admin profile, then check the restore before you rely on it."
      ],
-     "prompt": "Make the S3 endpoint and bucket names configurable per environment (local MinIO, AWS S3), add an AWS overlay that uses S3 through the instance role, and write a one-time script that copies the MinIO buckets to S3."
+     "prompt": "Make the S3 endpoint and bucket names configurable per environment (local SeaweedFS, AWS S3), add an AWS overlay that uses S3 through the instance role, and write a one-time script that copies the SeaweedFS buckets to S3."
     },
     {
      "id": "b4-2",
