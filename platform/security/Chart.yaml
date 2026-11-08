@@ -1,0 +1,14 @@
+# Cluster security for the application namespaces: the Namespaces
+# themselves with Pod Security Admission labels, and their NetworkPolicies.
+# Deployed by platform/apps/templates/security.yaml; see README.md
+# "Cluster security" and docs/network-flows.md.
+#
+# Render it by hand to check a change:
+#   helm template platform/security
+#   helm template platform/security --set kubeAPI.cidr=10.0.0.0/16
+apiVersion: v2
+name: security
+description: Namespaces with Pod Security labels, default-deny NetworkPolicies and explicit allows
+type: application
+# Never published, so the version never needs bumping.
+version: 0.1.0

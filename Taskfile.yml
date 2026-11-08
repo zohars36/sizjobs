@@ -63,6 +63,17 @@ vars:
   # For task pg:backups, which lists the bucket from a pod in the cluster.
   # Same image as platform/seaweedfs/manifests/create-buckets.yaml.
   AWS_CLI_IMAGE: amazon/aws-cli:2.38.1@sha256:733d5be1015825e4038c6016f3fa9954868ddee1f611b73be795a9cc2e706bfd
+  # Cluster security (a2-5): platform/security. The namespaces come from
+  # its values file (the list under namespaces:), so the tasks follow it.
+  SEC_VALUES: platform/security/values.yaml
+  SEC_NAMESPACES:
+    # A block scalar (|), because in a plain YAML value " #" starts a comment.
+    sh: |
+      awk '/^namespaces:/ {f=1; next} /^[^ #]/ {f=0} f && $1 == "-" {printf "%s ", $2}' platform/security/values.yaml
+  # The namespace task sec:test and sec:psa probe: the one with real flows.
+  SEC_TEST_NAMESPACE: data
+  # A small shell image with nc and nslookup, for task sec:test.
+  BUSYBOX_IMAGE: busybox:1.37.0@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
   BRANCH:
     sh: git rev-parse --abbrev-ref HEAD
   # Image tag: short commit, plus "-dirty" when there are uncommitted
@@ -533,6 +544,9 @@ tasks:
           name: POD_NAME
           labels:
             app.kubernetes.io/managed-by: sizjobs-task-pg-backups
+            # The NetworkPolicy pg-backups-ls (platform/security) selects
+            # this pod by name and lets it reach the S3 API.
+            app.kubernetes.io/name: pg-backups-ls
         spec:
           restartPolicy: Never
           # Killed after 2 minutes, so a stuck pod never lingers.
@@ -811,6 +825,203 @@ tasks:
           "{{.TASK_EXE}}" pg:backup
         fi
         echo "==> Restore drill: $result"
+        [ "$result" = PASS ]
+
+  # Cluster security (a2-5): Pod Security "restricted" and default-deny
+  # NetworkPolicies in the application namespaces, from platform/security.
+  # README.md "Cluster security" explains both layers. These tasks only
+  # read state or create short-lived pods that they delete again.
+  sec:status:
+    desc: Show the Pod Security labels and the NetworkPolicies of each application namespace
+    cmds:
+      - |
+        k() { kubectl --context {{.KCTX}} "$@"; }
+        for ns in {{.SEC_NAMESPACES}}; do
+          echo "==> Namespace $ns"
+          if ! k get namespace "$ns" >/dev/null 2>&1; then
+            echo "    MISSING. task argocd:status shows whether the security app has synced."
+            continue
+          fi
+          echo "    Pod Security labels:"
+          # The labels as a JSON map ({"a":"b",...}), one per line, keeping
+          # only the Pod Security ones.
+          k get namespace "$ns" -o jsonpath='{.metadata.labels}' | tr -d '{}"' | tr ',' '\n' \
+            | grep '^pod-security' | sed 's/:/=/; s/^/      /' || echo "      (none)"
+          echo "    NetworkPolicies:"
+          k -n "$ns" get networkpolicies -o custom-columns='NAME:.metadata.name,POD-SELECTOR:.spec.podSelector,TYPES:.spec.policyTypes' 2>/dev/null \
+            | sed 's/^/      /' | grep . || echo "      (none)"
+        done
+
+        # The API server allow rule is an ipBlock (kubeAPI.cidr). Docker
+        # picks the k3d network's subnet when the cluster is created, so a
+        # re-created cluster can land outside it; then CNPG loses the API.
+        block=kubeAPI key=cidr; cidr=$({{.PG_VALUE_AWK}} {{.SEC_VALUES}})
+        node_ip=$(k get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+        echo "==> API server allow rule: kubeAPI.cidr $cidr, node InternalIP $node_ip"
+        # IPv4 to a number, then compare the network parts.
+        in_cidr=$(awk -v ip="$node_ip" -v cidr="$cidr" 'BEGIN {
+          split(cidr, c, "/"); split(c[1], n, "."); split(ip, a, ".")
+          net = ((n[1] * 256 + n[2]) * 256 + n[3]) * 256 + n[4]
+          adr = ((a[1] * 256 + a[2]) * 256 + a[3]) * 256 + a[4]
+          size = 2 ^ (32 - c[2])
+          print (int(net / size) == int(adr / size)) ? "yes" : "no" }')
+        if [ "$in_cidr" = yes ]; then
+          echo "    ok: the node is inside the allowed range"
+        else
+          echo "    WARNING: the node is outside $cidr. Set kubeAPI.cidr in {{.SEC_VALUES}} to the k3d network:"
+          echo "    the Subnet in: docker network inspect k3d-{{.CLUSTER}}"
+        fi
+
+  sec:psa:
+    desc: "Pod Security test: try to create a privileged pod in data and confirm admission rejects it (PASS/FAIL)"
+    cmds:
+      - |
+        k() { kubectl --context {{.KCTX}} -n {{.SEC_TEST_NAMESPACE}} "$@"; }
+        ns={{.SEC_TEST_NAMESPACE}}
+        pod="sec-psa-$(date +%s)"
+        level=$(kubectl --context {{.KCTX}} get namespace "$ns" -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}')
+        echo "==> Namespace $ns enforces Pod Security level: ${level:-none}"
+        echo "==> Creating privileged pod $pod (privileged: true, root): admission must reject it"
+        # A real create, not a dry run. If it is wrongly admitted, the trap
+        # deletes it again; the image is never pulled in the normal case.
+        trap 'k delete pod "$pod" --ignore-not-found --wait=false >/dev/null 2>&1' EXIT
+        # Task's shell stops at the first failing command, and the expected
+        # outcome here is a failing create; "&& ... || ..." keeps its exit
+        # status instead of stopping.
+        out=$(sed "s/POD_NAME/$pod/" <<'EOF' | k create -f - 2>&1
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: POD_NAME
+          labels:
+            app.kubernetes.io/name: sec-psa
+            app.kubernetes.io/managed-by: sizjobs-task-sec-psa
+        spec:
+          restartPolicy: Never
+          activeDeadlineSeconds: 30
+          containers:
+            - name: privileged
+              image: {{.BUSYBOX_IMAGE}}
+              command: ["sleep", "30"]
+              securityContext:
+                privileged: true
+              resources:
+                limits:
+                  memory: 16Mi
+        EOF
+        ) && status=0 || status=$?
+        echo "$out" | sed 's/^/    /'
+        if [ "$status" -eq 0 ]; then
+          echo "==> FAIL: the privileged pod was admitted (deleting it now)"
+          exit 1
+        fi
+        # PSA's own wording, so a rejection for another reason (a typo, a
+        # missing namespace) does not count as a pass.
+        if echo "$out" | grep -q 'violates PodSecurity "restricted'; then
+          echo "==> PASS: Pod Security admission rejected the privileged pod"
+        else
+          echo "==> FAIL: the pod was rejected, but not by Pod Security (see above)"
+          exit 1
+        fi
+
+  sec:test:
+    desc: "NetworkPolicy test: from a pod with no allow policy, Postgres, S3 and the internet must be blocked and DNS must work (PASS/FAIL)"
+    cmds:
+      - |
+        k() { kubectl --context {{.KCTX}} -n {{.SEC_TEST_NAMESPACE}} "$@"; }
+        ns={{.SEC_TEST_NAMESPACE}}
+        pod="sec-test-$(date +%s)"
+        pg_host="{{.PG_CLUSTER}}-rw.$ns.svc.cluster.local"
+        s3_host="{{.S3_SERVICE}}.$ns.svc.cluster.local"
+        external_host=example.com
+        echo "==> Starting test pod $pod in namespace $ns"
+        echo "    Its label app.kubernetes.io/name=sec-test matches no allow policy, so only"
+        echo "    default-deny-all and allow-dns (which select every pod) apply to it."
+        trap 'echo "==> Deleting test pod $pod"; k delete pod "$pod" --ignore-not-found --wait=false >/dev/null 2>&1' EXIT
+        # Built to pass Pod Security "restricted": non-root (65534, the
+        # conventional "nobody"), no privilege escalation, no capabilities,
+        # the runtime's default seccomp profile, read-only root filesystem.
+        sed "s/POD_NAME/$pod/" <<'EOF' | k create -f - >/dev/null
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: POD_NAME
+          labels:
+            app.kubernetes.io/name: sec-test
+            app.kubernetes.io/managed-by: sizjobs-task-sec-test
+        spec:
+          restartPolicy: Never
+          # Killed after 3 minutes, so a stuck pod never lingers.
+          activeDeadlineSeconds: 180
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: probe
+              image: {{.BUSYBOX_IMAGE}}
+              command: ["sleep", "170"]
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  memory: 32Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+        EOF
+        k wait --for=condition=Ready pod/"$pod" --timeout=90s >/dev/null
+
+        result=PASS
+        report() { printf '    %-4s  %s\n' "$1" "$2"; [ "$1" = PASS ] || result=FAIL; }
+        # kubectl exec itself must work, or every "blocked" below would pass
+        # for the wrong reason.
+        if ! k exec "$pod" -- true; then
+          echo "==> FAIL: cannot exec into $pod"
+          exit 1
+        fi
+
+        # The targets must be up, or a blocked connection proves nothing.
+        echo "==> Checking that the targets have ready endpoints"
+        for svc in {{.PG_CLUSTER}}-rw {{.S3_SERVICE}}; do
+          addrs=$(k get endpointslices -l kubernetes.io/service-name="$svc" \
+                    -o jsonpath='{.items[*].endpoints[?(@.conditions.ready==true)].addresses[*]}')
+          if [ -n "$addrs" ]; then report PASS "service $svc is up ($addrs)"; else report FAIL "service $svc has no ready endpoint"; fi
+        done
+
+        echo "==> Connections that must be BLOCKED (3s timeout each)"
+        # nc -z: connect only, send nothing; -w 3: give up after 3 seconds.
+        # Exit 0 means the TCP connection was made.
+        blocked() {
+          if k exec "$pod" -- nc -z -w 3 "$2" "$3" 2>/dev/null; then
+            report FAIL "$1 $2:$3 connected"
+          else
+            report PASS "$1 $2:$3 blocked"
+          fi
+        }
+        blocked "Postgres" "$pg_host" 5432
+        # 8333: the S3 port inside the cluster (S3_LOCAL_PORT is the laptop's).
+        blocked "S3 API  " "$s3_host" 8333
+        blocked "internet" "$external_host" 443
+
+        echo "==> DNS lookups that must WORK"
+        # busybox nslookup prints the server first ("Server:", "Address:"),
+        # then one "Name:"/"Address:" pair per answer. Only answers count.
+        resolves() {
+          out=$(k exec "$pod" -- nslookup "$1" 2>&1)
+          addr=$(echo "$out" | awk '/^Name:/ {getline; print $NF; exit}')
+          if [ -n "$addr" ]; then report PASS "$1 resolves ($addr)"; else report FAIL "$1 does not resolve"; echo "$out" | sed 's/^/          /'; fi
+        }
+        resolves "$pg_host"
+        resolves "$external_host"
+
+        echo "==> NetworkPolicy test: $result"
         [ "$result" = PASS ]
 
   # ArgoCD bootstrap (a2-2). Helm installs ArgoCD itself; after that,

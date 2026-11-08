@@ -1,0 +1,6 @@
+{{- /*
+NetworkPolicies in agents (the agent arrives in a4). Only the baseline for
+now: deny all, plus DNS. a4 adds the agent's own allow rules here (egress
+to LiteLLM in llm and to Postgres in data).
+*/}}
+{{- include "security.baseline" (dict "ns" "agents" "root" .) }}
