@@ -1,0 +1,43 @@
+# cert-manager: issues TLS certificates inside the cluster. Needed by the
+# Barman Cloud Plugin (barman-cloud-plugin.yaml), whose gRPC connection to
+# the CloudNativePG operator uses mutual TLS with certificates cert-manager
+# creates and renews. Nothing here faces the internet; no ACME issuers.
+#
+# Comments must not contain double curly braces: Helm parses them too.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cert-manager
+  namespace: argocd
+  annotations:
+    # First of the database chain: cert-manager (-3), CNPG operator (-2),
+    # Barman Cloud Plugin (-1), Postgres (1). See platform/README.md.
+    argocd.argoproj.io/sync-wave: "-3"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://charts.jetstack.io
+      chart: cert-manager
+      targetRevision: v1.21.3
+      helm:
+        releaseName: cert-manager
+        valueFiles:
+          - $values/platform/cert-manager/values.yaml
+    - repoURL: "{{ .Values.repoURL }}"
+      targetRevision: "{{ .Values.revision }}"
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cert-manager
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # The CRDs are large; see cnpg-operator.yaml for why server-side
+      # apply avoids the 256KiB annotation limit.
+      - ServerSideApply=true

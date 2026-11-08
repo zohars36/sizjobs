@@ -1,0 +1,22 @@
+# Values for the CloudNativePG operator (platform/apps/templates/cnpg-operator.yaml).
+# Chart defaults: `helm show values cloudnative-pg --repo https://cloudnative-pg.github.io/charts --version <version>`
+
+# The operator's own process. It reconciles every Cluster, Backup and
+# Database in the cluster; with one Postgres cluster it stays small.
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+additionalEnv:
+  # Time zone for ScheduledBackup schedules. CNPG has no per-schedule time
+  # zone field and its cron library (robfig/cron v1) does not understand a
+  # CRON_TZ= prefix; it evaluates schedules in the process's local time,
+  # which is UTC unless TZ says otherwise. The image ships zoneinfo, and
+  # Asia/Jerusalem follows the switch between IST (UTC+2) and IDT (UTC+3),
+  # so "02:00" in a schedule stays 02:00 Israel time all year.
+  # This applies to every ScheduledBackup in the cluster; there is one.
+  - name: TZ
+    value: Asia/Jerusalem

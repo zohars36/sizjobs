@@ -1,0 +1,44 @@
+# Postgres: the "jobs" CloudNativePG cluster in namespace data, its backups
+# to object storage and the agent and litellm databases. A small chart in
+# this repo, platform/postgres; README.md "Database" explains how it runs.
+#
+# Needs the "s3" Secret (task secrets) for backups and the pg-agent and
+# pg-litellm Secrets (task secrets) for the database roles.
+#
+# Comments must not contain double curly braces: Helm parses them too.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: postgres
+  namespace: argocd
+  annotations:
+    # After SeaweedFS (wave 0): bootstrap in recovery mode reads the backup
+    # from it, and WAL archiving starts right away. Apps that use the
+    # database (LiteLLM, the agent) go in wave 2 or later.
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    # Deleting this Application deletes what it created, except the Cluster
+    # itself: that one is marked Delete=false in the chart, so data survives
+    # an accidental app deletion. Backups in S3 are never touched.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: "{{ .Values.repoURL }}"
+    targetRevision: "{{ .Values.revision }}"
+    path: platform/postgres
+    helm:
+      releaseName: postgres
+      # Part B adds values-aws.yaml here (AWS S3 endpoint, IAM role).
+      valueFiles:
+        - values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: data
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

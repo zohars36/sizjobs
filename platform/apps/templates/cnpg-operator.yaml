@@ -1,0 +1,60 @@
+# CloudNativePG operator: runs PostgreSQL clusters from Cluster resources
+# (the "jobs" cluster lives in postgres.yaml). Watches every namespace, runs
+# in cnpg-system. See docs/adr/0007-postgres-cloudnativepg.md.
+#
+# Comments must not contain double curly braces: Helm parses them too.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cnpg-operator
+  namespace: argocd
+  annotations:
+    # After cert-manager (-3), before the Barman Cloud Plugin (-1).
+    argocd.argoproj.io/sync-wave: "-2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://cloudnative-pg.github.io/charts
+      chart: cloudnative-pg
+      # Chart 0.29.1 installs operator 1.30.1. Keep the operator on 1.30.x
+      # until there is a reason to move; Renovate proposes bumps.
+      targetRevision: 0.29.1
+      helm:
+        releaseName: cnpg
+        valueFiles:
+          - $values/platform/cnpg-operator/values.yaml
+    - repoURL: "{{ .Values.repoURL }}"
+      targetRevision: "{{ .Values.revision }}"
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cnpg-system
+  # The operator writes its CA into the webhook configurations at startup.
+  # Git never sets that field, so tell ArgoCD it is not drift.
+  ignoreDifferences:
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[]?.clientConfig.caBundle
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[]?.clientConfig.caBundle
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # Client-side apply stores the whole object in the
+      # last-applied-configuration annotation, and annotations are capped at
+      # 256KiB. The Cluster CRD alone is bigger, so its apply would fail.
+      # Server-side apply tracks field ownership on the API server instead
+      # and needs no such annotation.
+      - ServerSideApply=true
+      # Apply ignoreDifferences during sync too, not only in the diff, so a
+      # sync never overwrites the injected caBundle with nothing.
+      - RespectIgnoreDifferences=true

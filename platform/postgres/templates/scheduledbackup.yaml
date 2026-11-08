@@ -1,0 +1,25 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ .Values.cluster.name }}-daily
+  annotations:
+    # After the Cluster is healthy: a backup of a cluster that is still
+    # starting fails.
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  cluster:
+    name: {{ .Values.cluster.name }}
+  schedule: {{ .Values.scheduledBackup.schedule | quote }}
+  # Base backup through the plugin, into the generation the Cluster
+  # archives to (its serverName parameter).
+  method: plugin
+  pluginConfiguration:
+    name: {{ include "postgres.pluginName" . }}
+  # The Backup resources this creates are owned by the ScheduledBackup, so
+  # they are cleaned up with it. (The default, "none", leaves them behind.)
+  # The backup data in S3 follows the ObjectStore retention policy instead.
+  backupOwnerReference: self
+  # Also take one right away when this resource is created. A new cluster
+  # (or a restored one, in a new generation) then has a base backup of its
+  # own at once, instead of only WAL until the first 02:00.
+  immediate: true

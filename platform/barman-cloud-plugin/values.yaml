@@ -1,0 +1,18 @@
+# Values for the Barman Cloud Plugin (platform/apps/templates/barman-cloud-plugin.yaml).
+# Chart defaults: `helm show values plugin-barman-cloud --repo https://cloudnative-pg.github.io/charts --version <version>`
+#
+# This sizes the plugin's own Deployment, which only answers the operator's
+# gRPC calls. The sidecar that does the real work (barman-cloud uploads and
+# downloads inside each Postgres pod) is sized in the ObjectStore resource:
+# platform/postgres/templates/objectstore.yaml.
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
+# Certificates: the chart creates a self-signed Issuer and the server and
+# client certificates for the operator <-> plugin mTLS. Its defaults (90
+# days, renewed 15 days before expiry) are fine, so nothing is set here.

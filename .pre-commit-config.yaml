@@ -25,6 +25,11 @@ repos:
       - id: check-yaml
         # Kubernetes manifests often hold several documents split by "---".
         args: [--allow-multiple-documents]
+        # Helm templates are Go templates that render to YAML, not YAML
+        # themselves (e.g. a line that starts with an action). Check them
+        # by rendering instead: helm template platform/postgres. The
+        # templates in platform/apps stay valid YAML on purpose.
+        exclude: ^platform/postgres/templates/
       - id: check-merge-conflict
       - id: check-added-large-files
         args: [--maxkb=1024]

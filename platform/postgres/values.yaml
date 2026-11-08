@@ -1,0 +1,121 @@
+# Values for the "jobs" Postgres cluster (platform/postgres).
+# Part A (k3d) uses this file as is; Part B layers values-aws.yaml on top.
+#
+# Taskfile.yml (pg:* tasks) reads cluster.name, objectStore.bucket/path and
+# the bootstrap block with awk, and task pg:restore-drill rewrites the
+# bootstrap block. Keep those as plain `key: value` lines, two-space
+# indented under their top-level key, without quotes (restoreFrom's ""
+# excepted).
+
+# ---------------------------------------------------------------------------
+# How the cluster is created, and where its WAL and base backups go.
+#
+# mode:
+#   initdb    a new, empty cluster.
+#   recovery  restore from the latest base backup under restoreFrom, then
+#             replay that generation's archived WAL up to its end.
+# Only read when the Cluster is created. Changing it on a running cluster
+# does nothing until the Cluster is deleted and created again.
+#
+# Generations. Every Cluster archives into its own folder ("serverName")
+# under the object store: s3://<bucket>/<path>/<serverName>/{base,wals}.
+# A new cluster refuses to archive into a folder that already holds WAL
+# (barman-cloud-check-wal-archive: "Expected empty archive"), because two
+# timelines writing the same folder would corrupt the archive. So every
+# time a Cluster is created from scratch, archiveTo moves to the next
+# generation, and a recovery reads the previous one:
+#
+#   fresh cluster      mode: initdb    restoreFrom: ""       archiveTo: jobs-g1
+#   after restore #1   mode: recovery  restoreFrom: jobs-g1  archiveTo: jobs-g2
+#   after restore #2   mode: recovery  restoreFrom: jobs-g2  archiveTo: jobs-g3
+#
+# task pg:restore-drill does this bump itself; README.md "Database" has the
+# steps to do it by hand. The template refuses restoreFrom == archiveTo.
+bootstrap:
+  mode: initdb
+  restoreFrom: ""
+  archiveTo: jobs-g1
+
+# ---------------------------------------------------------------------------
+cluster:
+  name: jobs
+  # One instance: no replicas, no failover. A single-node cluster cannot
+  # offer more, and backups plus the restore drill cover data loss.
+  instances: 1
+  # A "standard" image (PostgreSQL plus locales, pgaudit, pgvector and
+  # pg_failover_slots), not the "system" image, which bundles the old
+  # in-tree Barman Cloud tools the plugin replaces.
+  # The dated tag is immutable (CNPG rebuilds every week under a new date
+  # tag); the digest pins the exact bytes. 17.11 built 2026-10-19.
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.11-202610190957-standard-trixie@sha256:1c80146a60cf8010042616c67370b2861a1877b9fcf9dd6dd2a9395aa406b568
+  # PVC for PGDATA and pg_wal. local-path (k3s default) does not enforce
+  # sizes, so 2Gi documents the intent locally; on EBS it is real.
+  storageSize: 2Gi
+  # Empty: the cluster's default StorageClass.
+  storageClass: ""
+  # The postgres container. shared_buffers (below) plus per-connection
+  # memory has to fit under the limit, with room for the page cache the
+  # kernel charges to the pod.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  parameters:
+    # Postgres's own cache. CNPG's default is 128MB too, but stated here
+    # because the memory limit above is sized around it.
+    shared_buffers: 128MB
+
+# ---------------------------------------------------------------------------
+# The object store for base backups and WAL (an ObjectStore resource of the
+# Barman Cloud Plugin).
+objectStore:
+  name: jobs-backups
+  # Backups land in s3://<bucket>/<path>/<serverName>/.
+  bucket: backups
+  path: cnpg
+  # S3 API endpoint. Locally SeaweedFS; the same URL as S3_ENDPOINT in the
+  # data/s3-config ConfigMap (platform/seaweedfs/manifests/s3-config.yaml).
+  # It is repeated here because ObjectStore takes a plain string, not a
+  # reference. Empty means AWS S3 itself (Part B).
+  endpointURL: http://seaweedfs-all-in-one.data.svc.cluster.local:8333
+  # Secret in this namespace with the access keys. Empty means "use the
+  # node's IAM role" (Part B, inheritFromIAMRole).
+  credentialsSecret: s3
+  accessKeyIdKey: S3_ACCESS_KEY
+  secretAccessKeyKey: S3_SECRET_KEY
+  # Base backups and WAL older than this are deleted by the plugin, always
+  # keeping what is needed to restore to any point inside the window.
+  # Applies to the generation being archived to; older generations are left
+  # alone (README.md "Database" says how to clean them up).
+  retentionPolicy: 7d
+  # The plugin sidecar in the Postgres pod runs barman-cloud-wal-archive for
+  # every WAL segment and barman-cloud-backup for base backups.
+  sidecarResources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+# ---------------------------------------------------------------------------
+# Daily base backup. CNPG's cron format has a seconds field first:
+#   sec min hour day-of-month month day-of-week
+# The operator evaluates it in Asia/Jerusalem (TZ in
+# platform/cnpg-operator/values.yaml), so this is 02:00 Israel time.
+scheduledBackup:
+  schedule: "0 0 2 * * *"
+
+# ---------------------------------------------------------------------------
+# Application databases. Each gets a login role of the same name, managed
+# by CNPG, whose password comes from a kubernetes.io/basic-auth Secret
+# (keys username and password) made by `task secrets` from
+# config/secrets-map.yaml. The Secret's username must equal the role name.
+databases:
+  - name: agent
+    owner: agent
+    passwordSecret: pg-agent
+  - name: litellm
+    owner: litellm
+    passwordSecret: pg-litellm

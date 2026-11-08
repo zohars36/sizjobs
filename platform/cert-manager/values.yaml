@@ -1,0 +1,60 @@
+# Values for cert-manager (platform/apps/templates/cert-manager.yaml).
+# Chart defaults: `helm show values cert-manager --repo https://charts.jetstack.io --version <version>`
+#
+# Only used for in-cluster certificates (the Barman Cloud Plugin's mTLS), so
+# everything is sized for a handful of Certificates.
+
+crds:
+  # Install the CRDs with the chart. (The older installCRDs flag does the same
+  # and is deprecated.)
+  enabled: true
+  # Keep the CRDs when the release is removed: deleting a CRD deletes every
+  # Certificate and Issuer in the cluster with it.
+  keep: true
+
+# Metrics Service for Prometheus. Nothing scrapes it yet (Grafana Alloy
+# comes in a6-1); turn it on then.
+prometheus:
+  enabled: false
+
+# The controller: watches Certificates and Issuers, renews certificates.
+resources:
+  requests:
+    cpu: 10m
+    memory: 48Mi
+  limits:
+    memory: 128Mi
+
+# Admission webhook: validates cert-manager resources on create/update.
+webhook:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 24Mi
+    limits:
+      memory: 64Mi
+
+# Writes CA bundles into webhook configurations and CRDs that ask for it
+# (the cert-manager.io/inject-ca-from annotation).
+cainjector:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 48Mi
+    limits:
+      memory: 128Mi
+
+# A one-off Job after each sync that waits until the webhook answers. ArgoCD
+# runs it as a PostSync hook, so the cert-manager app only reports a finished
+# sync once cert-manager can really serve requests. The plugin in the next
+# wave creates Certificates and would fail before that.
+startupapicheck:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 64Mi
+
+# No CPU limits anywhere (see platform/bootstrap/argocd-values.yaml):
+# memory limits protect WSL, CPU limits would only throttle.
