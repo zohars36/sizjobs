@@ -350,6 +350,93 @@ kubectl cnpg version     # should match the operator's minor, 1.30
 krew always installs the newest plugin release. `krew upgrade cnpg`
 updates it; keep its minor version in line with the operator.
 
+## Cluster security
+
+The application namespaces `data`, `llm` and `agents` have two layers of
+protection, both from git through the ArgoCD app `security`
+(`platform/security`, sync wave -4, so they exist before any workload).
+Platform namespaces (`argocd`, `cnpg-system`, `cert-manager`,
+`kube-system`) are left to their own charts. Why this shape:
+[ADR 0008](docs/adr/0008-cluster-security.md).
+
+### Layer 1: Pod Security "restricted"
+
+Pod Security Admission is built into the API server. Labels on each
+namespace set the level for three modes: `enforce` rejects a pod that
+breaks the rules, `audit` logs it, `warn` prints a warning to whoever
+created it. All three are `restricted`, pinned to `v1.36` (the k3s
+version) so a Kubernetes upgrade cannot tighten the rules by surprise.
+
+`restricted` means every container must run as non-root, set
+`allowPrivilegeEscalation: false`, drop all capabilities, use the
+`RuntimeDefault` (or a custom) seccomp profile, and use no host
+namespaces, ports or paths. A pod spec that passes:
+
+```yaml
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000          # a fixed UID when the image defaults to root
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: app
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+```
+
+If a pod is rejected, fix its spec; never lower the namespace's level.
+Pods inside a Job or Deployment are checked when the controller creates
+them, so a bad template shows up as an event on the Job or ReplicaSet
+(`kubectl -n data get events`), not as an error from `kubectl apply`.
+
+### Layer 2: NetworkPolicies, default-deny
+
+k3s enforces NetworkPolicy out of the box (its embedded kube-router), on
+k3d too. Every application namespace has:
+
+- `default-deny-all`: no traffic in or out for any pod.
+- `allow-dns`: every pod may query CoreDNS on port 53.
+
+Everything else is an explicit exception, selected by pod and namespace
+labels (never by IP, except the API server, which on k3s runs on the node
+and is allowed as the `kubeAPI.cidr` ipBlock). The flows and the policy
+for each are in [docs/network-flows.md](docs/network-flows.md).
+
+### Adding an allow rule for a new service
+
+1. Find the real flows: which pods connect to which, on which ports
+   (the service's docs, then check them against the running pods).
+2. Give the pods a stable label, such as `app.kubernetes.io/name: litellm`.
+3. In `platform/security/templates/networkpolicies-<namespace>.yaml`, add
+   a policy that selects those pods with their egress (what they connect
+   to) and their ingress (who connects to them). If the other end is in
+   an application namespace too, it needs the matching rule there:
+   default-deny blocks both directions. Across namespaces, put
+   `namespaceSelector` (on `kubernetes.io/metadata.name`) and
+   `podSelector` in the same list item so both must match. The data
+   template ends with a commented example for Postgres clients.
+4. Add a row to `docs/network-flows.md`.
+5. Commit, push, let ArgoCD sync, and check the service works and
+   `task sec:test` still passes.
+
+### Testing
+
+```bash
+task sec:status   # Pod Security labels and NetworkPolicies per namespace
+task sec:psa      # a privileged pod in data must be rejected
+task sec:test     # from a pod with no allow rule: Postgres, S3 and the
+                  # internet blocked, DNS working
+```
+
+`sec:test` first checks that Postgres and S3 have ready endpoints, so a
+blocked connection really is the policy and not a service that is down.
+`sec:status` also warns when the node's address has left `kubeAPI.cidr`:
+Docker picks the k3d network's subnet when the cluster is created, so a
+re-created cluster can land on another one.
+
 ## Local model
 
 A small model on the laptop, for offline smoke tests only. The laptop has

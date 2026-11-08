@@ -12,6 +12,7 @@ platform/
   <app>/values.yaml              values a child reads from this repo, e.g. demo/
   <app>/manifests/               plain manifests a child deploys next to its chart, e.g. seaweedfs/
   postgres/                      a chart of our own (Cluster jobs and its backups), see README.md "Database"
+  security/                      a chart of our own (namespaces, Pod Security, NetworkPolicies), see README.md "Cluster security"
 ```
 
 Every workload sets memory requests and limits: the cluster has 7 GiB.
@@ -78,6 +79,11 @@ wave. Every child Application has:
 - a sync wave (below)
 - any source in this repo at `"{{ .Values.revision }}"`, never a fixed branch
 
+An app in a new application namespace also needs that namespace in
+`security/values.yaml` (Pod Security labels) and a
+`security/templates/networkpolicies-<namespace>.yaml` with its allow rules;
+see README.md "Cluster security".
+
 ## S3 (SeaweedFS)
 
 Part A's stand-in for AWS S3 is SeaweedFS in namespace `data`
@@ -118,7 +124,7 @@ check in `bootstrap/argocd-values.yaml`).
 
 | Wave | What | Examples |
 |---|---|---|
-| -4 | Namespaces | namespaces with Pod Security labels (a2-5) |
+| -4 | Namespaces and policies | `security`: application namespaces with Pod Security labels, NetworkPolicies |
 | -3 | Operator prerequisites | cert-manager |
 | -2 | Operators | CloudNativePG operator |
 | -1 | Operator plugins | Barman Cloud Plugin (needs cert-manager and the operator) |

@@ -1,0 +1,6 @@
+{{- /*
+NetworkPolicies in llm (LiteLLM arrives in a3). Only the baseline for now:
+deny all, plus DNS. a3 adds LiteLLM's own allow rules here (ingress from
+agents, egress to Postgres in data and to the model providers).
+*/}}
+{{- include "security.baseline" (dict "ns" "llm" "root" .) }}

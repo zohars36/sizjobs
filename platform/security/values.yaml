@@ -1,0 +1,92 @@
+# Values for platform/security: Pod Security and NetworkPolicies of the
+# application namespaces. Part A (k3d) uses this file as is; Part B layers
+# values-aws.yaml on top (kubeAPI.cidr, s3).
+#
+# task sec:status reads kubeAPI.cidr with awk: keep it a plain
+# `key: value` line, two-space indented, without quotes.
+
+# ---------------------------------------------------------------------------
+# Pod Security Admission (PSA): the API server's built-in admission plugin.
+# Each namespace gets the same level for all three modes:
+#   enforce  reject a pod that breaks the level
+#   audit    record the violation in the API server's audit log
+#   warn     send the client a warning (kubectl prints it)
+# "restricted" is the strictest standard profile: non-root, no privilege
+# escalation, all capabilities dropped, a seccomp profile, no host
+# namespaces, ports or paths.
+podSecurity:
+  level: restricted
+  # The version of the rules, pinned to the cluster's minor version
+  # (k3s v1.36.5). "latest" would make a Kubernetes upgrade tighten the
+  # rules silently and start rejecting pods; with a pin, an upgrade keeps
+  # the old rules until this value is bumped on purpose. Bump it together
+  # with k3s (k3d/sizjobs.yaml) and kubectl (.mise.toml).
+  version: v1.36
+
+# The application namespaces. Platform namespaces (argocd, cnpg-system,
+# cert-manager, kube-system) are out of scope: their charts manage them.
+# Each name here has a networkpolicies-<name>.yaml template.
+#   data    SeaweedFS (S3) and the Postgres cluster jobs
+#   llm     LiteLLM (a3)
+#   agents  the agent (a4); the name config/secrets-map.yaml uses
+namespaces:
+  - data
+  - llm
+  - agents
+
+# ---------------------------------------------------------------------------
+# Destinations that NetworkPolicies allow by address or by label.
+
+# The Kubernetes API server. On k3s it is not a pod: it runs inside the
+# k3s process on the node, so the kubernetes Service (10.43.0.1:443)
+# forwards to the node's own address on 6443. NetworkPolicy sees the
+# address after that translation, so pods that talk to the API need an
+# ipBlock for the node network. The only allow rule written as addresses.
+kubeAPI:
+  # Locally: the Docker network of the k3d cluster (docker network inspect
+  # k3d-sizjobs). Docker picks the subnet when the cluster is created, so
+  # task sec:status warns if the node is no longer inside it.
+  # Part B: the VPC CIDR.
+  cidr: 172.19.0.0/16
+  # 6443 is what the policy sees after the Service translation; 443 covers
+  # a client that reaches the API on the Service port without translation.
+  ports: [6443, 443]
+
+# CoreDNS, which every pod needs for names like jobs-rw.data.svc.
+dns:
+  namespace: kube-system
+  podLabels:
+    k8s-app: kube-dns
+
+# Object storage: where backup and bucket clients may send traffic.
+# Locally SeaweedFS in data, selected by its labels. Part B points the
+# clients at AWS S3, outside the cluster: set inCluster: false, and the
+# egress rules become HTTPS to externalCIDR instead.
+s3:
+  inCluster: true
+  podLabels:
+    app.kubernetes.io/name: seaweedfs
+    app.kubernetes.io/component: seaweedfs-all-in-one
+  port: 8333
+  # SeaweedFS's own components (master, volume server, filer), HTTP and
+  # gRPC each, as the chart's pod spec names them: swfs-mas(-grpc),
+  # swfs-vol(-grpc), swfs-fil(-grpc).
+  internalPorts: [9333, 19333, 8080, 18080, 8888, 18888]
+  # Only used when inCluster is false. S3 has no fixed small range of
+  # addresses, so this is usually 0.0.0.0/0 on port 443.
+  externalCIDR: 0.0.0.0/0
+  externalPort: 443
+
+# ---------------------------------------------------------------------------
+# Pods in data, by label. docs/network-flows.md lists the flows between them.
+data:
+  # The CloudNativePG operator, in its own namespace.
+  operator:
+    namespace: cnpg-system
+    podLabels:
+      app.kubernetes.io/name: cloudnative-pg
+  # The Postgres cluster (platform/postgres, cluster.name).
+  pgCluster: jobs
+  # CNPG Job pods (label cnpg.io/jobRole) that create the cluster:
+  # initdb for a new one, full-recovery for a restore from object storage.
+  pgBootstrapJobRoles: [initdb, full-recovery]

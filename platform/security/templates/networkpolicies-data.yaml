@@ -1,0 +1,192 @@
+{{- /*
+NetworkPolicies in data: SeaweedFS (S3) and the Postgres cluster.
+docs/network-flows.md has the same flows as a table, with how each was
+found. A flow needs two rules when both ends are in this namespace: egress
+on the client's policy and ingress on the server's, since default-deny-all
+blocks both directions.
+
+kubelet health probes need no rule: on k3s the policy engine (kube-router)
+always accepts traffic that starts on the pod's own node.
+*/}}
+{{- $d := .Values.data }}
+{{- include "security.baseline" (dict "ns" "data" "root" .) }}
+---
+# The Postgres instance pods (one today, instances: 1). Each runs Postgres,
+# CNPG's instance manager, and the Barman Cloud Plugin sidecar.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pg-instances
+  namespace: data
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ $d.pgCluster }}
+      # Instance pods only; Job pods of the same cluster have no podRole.
+      cnpg.io/podRole: instance
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # The operator asks each instance for its status over HTTPS on 8000,
+    # and may connect to Postgres itself.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $d.operator.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $d.operator.podLabels | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 5432
+  egress:
+    # The instance manager watches its Cluster, and the plugin sidecar
+    # reads the ObjectStore and the s3 Secret, through the API server.
+    {{- include "security.egressKubeAPI" . | nindent 4 }}
+    # The plugin sidecar ships WAL and base backups to object storage.
+    {{- include "security.egressS3" . | nindent 4 }}
+---
+# CNPG's bootstrap Jobs, which build the data directory before the first
+# instance starts: initdb (new cluster) or full-recovery (restore from
+# object storage). Selected by their own jobRole label.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pg-bootstrap-jobs
+  namespace: data
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ $d.pgCluster }}
+    matchExpressions:
+      - key: cnpg.io/jobRole
+        operator: In
+        values: {{ toJson $d.pgBootstrapJobRoles }}
+  policyTypes: [Ingress, Egress]
+  # No ingress rules: nothing connects to these pods.
+  egress:
+    # The instance manager in the Job reads the Cluster and its Secrets.
+    {{- include "security.egressKubeAPI" . | nindent 4 }}
+    # full-recovery downloads the base backup and WAL (plugin sidecar).
+    {{- include "security.egressS3" . | nindent 4 }}
+---
+# The create-buckets Job (platform/seaweedfs/manifests/create-buckets.yaml).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: create-buckets
+  namespace: data
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: create-buckets
+  policyTypes: [Ingress, Egress]
+  egress:
+    {{- include "security.egressS3" . | nindent 4 }}
+---
+# The short-lived pod of task pg:backups, which lists the backup bucket.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pg-backups-ls
+  namespace: data
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pg-backups-ls
+  policyTypes: [Ingress, Egress]
+  egress:
+    {{- include "security.egressS3" . | nindent 4 }}
+{{- if .Values.s3.inCluster }}
+---
+# SeaweedFS: who may use its S3 API. The same clients as the egress rules
+# above; each needs both sides.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: seaweedfs
+  namespace: data
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml .Values.s3.podLabels | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        # Separate list items: a pod matching any one of them.
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ $d.pgCluster }}
+              cnpg.io/podRole: instance
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ $d.pgCluster }}
+            matchExpressions:
+              - key: cnpg.io/jobRole
+                operator: In
+                values: {{ toJson $d.pgBootstrapJobRoles }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: create-buckets
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pg-backups-ls
+      ports:
+        - protocol: TCP
+          port: {{ .Values.s3.port }}
+    # Master, volume server and filer (HTTP and gRPC) talking to each
+    # other. In the all-in-one pod they share one process and reach each
+    # other on the pod's own IP, which never leaves the pod, so no policy
+    # applies today. This rule keeps that working if they are ever split
+    # into separate pods (the chart's normal mode).
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- toYaml .Values.s3.podLabels | nindent 14 }}
+      ports:
+        {{- range .Values.s3.internalPorts }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+  egress:
+    # The other side of the rule above. SeaweedFS needs nothing else: it
+    # stores to its own volume and calls out to nothing.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml .Values.s3.podLabels | nindent 14 }}
+      ports:
+        {{- range .Values.s3.internalPorts }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+{{- end }}
+
+# ---------------------------------------------------------------------------
+# Clients of Postgres: none yet. When LiteLLM (a3, namespace llm) and the
+# agent (a4, namespace agents) arrive, they get in like this: add the
+# ingress rule below to pg-instances, and an egress rule to the jobs pods
+# on 5432 in the client's own namespace (networkpolicies-llm.yaml,
+# networkpolicies-agents.yaml), since that namespace denies egress too.
+#
+#   ingress:
+#     - from:
+#         # The agent's pods in agents. namespaceSelector and podSelector
+#         # in one item: both must match.
+#         - namespaceSelector:
+#             matchLabels:
+#               kubernetes.io/metadata.name: agents
+#           podSelector:
+#             matchLabels:
+#               app.kubernetes.io/name: agent
+#         # LiteLLM's pods in llm.
+#         - namespaceSelector:
+#             matchLabels:
+#               kubernetes.io/metadata.name: llm
+#           podSelector:
+#             matchLabels:
+#               app.kubernetes.io/name: litellm
+#       ports:
+#         - protocol: TCP
+#           port: 5432

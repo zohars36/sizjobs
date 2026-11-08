@@ -32,6 +32,11 @@ spec:
   # Give up after 5 minutes in total, so a broken sync does not hang.
   activeDeadlineSeconds: 300
   template:
+    metadata:
+      labels:
+        # The NetworkPolicy create-buckets (platform/security) selects the
+        # pod by this label and lets it reach the S3 API.
+        app.kubernetes.io/name: create-buckets
     spec:
       restartPolicy: Never
       # No Kubernetes API access needed: do not mount a token.

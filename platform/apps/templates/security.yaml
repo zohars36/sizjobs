@@ -1,0 +1,48 @@
+# Cluster security: the application namespaces (data, llm, agents) with
+# Pod Security "restricted", and their NetworkPolicies. A small chart in
+# this repo, platform/security; README.md "Cluster security" explains it.
+#
+# Comments must not contain double curly braces: Helm parses them too.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: security
+  namespace: argocd
+  annotations:
+    # Wave -4, before everything else: the namespaces and their policies
+    # exist before any workload lands in them, so no pod ever starts
+    # without Pod Security or outside default-deny.
+    argocd.argoproj.io/sync-wave: "-4"
+  finalizers:
+    # Deleting this Application deletes its NetworkPolicies, but not the
+    # Namespaces: those are marked Delete=false in the chart.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: "{{ .Values.repoURL }}"
+    targetRevision: "{{ .Values.revision }}"
+    path: platform/security
+    helm:
+      releaseName: security
+      # Part B adds values-aws.yaml here (VPC CIDR, AWS S3).
+      valueFiles:
+        - values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    # Every resource in the chart names its namespace (or is a Namespace),
+    # so this is only the default for anything that does not.
+    namespace: data
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m
+    # No CreateNamespace: this app creates the namespaces itself, with
+    # their labels.

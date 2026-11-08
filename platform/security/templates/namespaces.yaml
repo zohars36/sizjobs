@@ -1,0 +1,27 @@
+{{- /*
+The application namespaces, with Pod Security Admission labels. Other
+apps (seaweedfs, postgres) still say CreateNamespace=true; that only
+creates a namespace when it is missing and never changes its labels, so
+this file stays the one place that owns them.
+*/}}
+{{- $ps := .Values.podSecurity }}
+{{- range .Values.namespaces }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ . }}
+  annotations:
+    # A namespace holds everything in it, PVCs (and so data) included.
+    # Prune=false: if it disappears from git, ArgoCD reports it instead of
+    # deleting it. Delete=false: deleting the security Application leaves
+    # it in place. Remove a namespace by hand when you mean it.
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+  labels:
+    pod-security.kubernetes.io/enforce: {{ $ps.level }}
+    pod-security.kubernetes.io/enforce-version: {{ $ps.version }}
+    pod-security.kubernetes.io/audit: {{ $ps.level }}
+    pod-security.kubernetes.io/audit-version: {{ $ps.version }}
+    pod-security.kubernetes.io/warn: {{ $ps.level }}
+    pod-security.kubernetes.io/warn-version: {{ $ps.version }}
+{{- end }}
