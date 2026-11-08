@@ -47,6 +47,15 @@ spec:
     automated:
       prune: true
       selfHeal: true
+    # Retry a failed sync instead of waiting for the next commit. Without
+    # this, a sync that fails once (a CRD from an earlier wave not there
+    # yet, a chart download timing out) stays failed until git changes.
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m
     syncOptions:
       - CreateNamespace=true
       # Client-side apply stores the whole object in the

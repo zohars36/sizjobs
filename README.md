@@ -172,9 +172,9 @@ deletes its directory (the StorageClass reclaim policy is `Delete`).
 
 After `task dev:delete` the PVC directories stay on disk, but a
 re-created PVC has a new UID and gets a new, empty directory. To get old
-data back, copy it from the old directory into the new one. Postgres and
-SeaweedFS get proper backups later; until then, treat cluster delete as losing
-in-cluster state.
+data back, copy it from the old directory into the new one. Postgres has
+real backups (see [Database](#database)); for everything else, treat
+cluster delete as losing in-cluster state.
 
 ### Resetting
 
@@ -189,6 +189,166 @@ task dev:delete && sudo rm -rf ~/.local/share/sizjobs
 
 Re-create the cluster after changing `k3d/sizjobs.yaml`: most settings
 (memory cap, registry, volumes) only apply at creation.
+
+## Database
+
+One PostgreSQL 17 cluster, `jobs`, in namespace `data`, run by the
+[CloudNativePG](https://cloudnative-pg.io) operator (CNPG). It holds the
+agent's results (database `agent`) and LiteLLM's state (`litellm`).
+Why CNPG and how backups are named:
+[ADR 0007](docs/adr/0007-postgres-cloudnativepg.md).
+
+### What runs
+
+| ArgoCD app | Wave | What | Namespace |
+|---|---|---|---|
+| `cert-manager` | -3 | TLS certificates for the plugin's connection to the operator | `cert-manager` |
+| `cnpg-operator` | -2 | the CNPG operator 1.30 | `cnpg-system` |
+| `barman-cloud-plugin` | -1 | the Barman Cloud Plugin: backups and WAL archiving to S3 | `cnpg-system` |
+| `postgres` | 1 | chart [platform/postgres](platform/postgres): Cluster, ObjectStore, ScheduledBackup, Databases | `data` |
+
+The Cluster has one instance (pod `jobs-1`, 256Mi requested, 512Mi
+limit, `shared_buffers` 128MB) with a 2Gi PVC, from the standard CNPG
+image. Settings are in
+[platform/postgres/values.yaml](platform/postgres/values.yaml).
+
+The roles `agent` and `litellm` own their databases. Their passwords come
+from `PG_AGENT_PASSWORD` and `PG_LITELLM_PASSWORD` in the .env, which
+`task secrets` turns into the basic-auth Secrets `pg-agent` and
+`pg-litellm`. Change a password in the .env and run `task secrets` again
+to rotate it. The `postgres` superuser has no password and no network
+login. `task pg:psql` uses it through `kubectl exec`.
+
+### How backups work
+
+Backups go to `s3://backups/cnpg` on SeaweedFS (AWS S3 in Part B) through
+the Barman Cloud Plugin, in two streams:
+
+- **WAL archiving.** Postgres writes changes to its write-ahead log in
+  16MB segments. The plugin's sidecar in pod `jobs-1` uploads each
+  finished segment within seconds, so the archive is always nearly
+  current. The Cluster's `ContinuousArchiving` condition says whether
+  this works.
+- **Base backups.** A full copy of the data directory, daily at 02:00
+  Israel time (ScheduledBackup `jobs-daily`), and whenever you run
+  `task pg:backup`.
+
+A restore takes the newest base backup and replays the archived WAL after
+it. That brings back everything up to the last archived segment, not
+only what the 02:00 backup had. The plugin deletes backups and WAL older
+than 7 days, always keeping enough to restore to any point in that
+window.
+
+```bash
+task pg:status        # cluster, last base backup, ContinuousArchiving
+task pg:backup        # base backup now, waits until it completes
+task pg:backups       # what is in the bucket, per generation
+task pg:psql          # psql as postgres; DB=agent task pg:psql for another database
+task pg:psql DB=agent -- -c 'select now()'   # one statement, no prompt
+```
+
+### Generations
+
+Every cluster archives into its own folder, its *serverName*:
+`s3://backups/cnpg/jobs-g1/`, then `jobs-g2/`, and so on. A cluster
+restored from `jobs-g1` must not archive back into `jobs-g1`. That folder
+already holds the old cluster's WAL. The plugin refuses to archive into a
+non-empty folder ("Expected empty archive"), because two timelines in one
+folder would corrupt it. So `bootstrap` in `values.yaml` names both
+sides:
+
+```yaml
+bootstrap:
+  mode: recovery        # initdb: new, empty cluster; recovery: restore
+  restoreFrom: jobs-g1  # generation to restore from (recovery only)
+  archiveTo: jobs-g2    # generation this cluster writes to
+```
+
+The block is only read when the Cluster is created. Any time the Cluster
+is created again from scratch, bump the generation first.
+
+### Bumping the generation by hand
+
+You need this when the cluster must be rebuilt from its backups outside
+the drill: lost PVC, `task dev:delete`, a broken cluster. It is the
+drill's steps 3 to 5 by hand. The order matters, so pause ArgoCD first.
+If ArgoCD syncs the bump into a cluster that is still running, that
+cluster starts archiving into the new generation, and the restored one
+then finds the folder taken. With `archiveTo: jobs-gN`, on a branch
+ArgoCD tracks (`task dev:up`):
+
+```bash
+kubectl -n argocd annotate applications.argoproj.io postgres argocd.argoproj.io/skip-reconcile=true
+# If a Cluster exists (old, broken, or an empty one ArgoCD just made):
+kubectl -n data delete clusters.postgresql.cnpg.io jobs   # its PVC goes with it
+# Edit platform/postgres/values.yaml:
+#   mode: recovery, restoreFrom: jobs-gN, archiveTo: jobs-gN+1
+git commit -m "pg: archive generation jobs-gN -> jobs-gN+1" platform/postgres/values.yaml
+git push
+kubectl -n argocd annotate applications.argoproj.io postgres argocd.argoproj.io/skip-reconcile- argocd.argoproj.io/refresh=hard
+task pg:status   # until Ready, then:
+task pg:backup   # a base backup of the new generation's own
+```
+
+Then merge the change to main, so the next rebuild starts from it. The
+Cluster is marked `Prune=false`, so ArgoCD never deletes it on its own.
+
+Old generations are not deleted by the retention policy, which only
+covers the folder being archived to. Once the new generation has a base
+backup, remove old ones with `aws s3 rm --recursive` on
+`s3://backups/cnpg/jobs-gN/` (`task s3:forward` gives you the endpoint).
+
+### Restore drill
+
+```bash
+task pg:restore-drill   # asks first; --yes skips the question
+```
+
+The full cycle, run on a branch that ArgoCD tracks, with no other
+unpushed commits. It takes a few minutes:
+
+1. Checks that `jobs` is Ready and archiving.
+2. Writes canary row 1, takes a base backup, then writes canary row 2 and
+   waits until its WAL segment is archived. Row 2 is in no base backup,
+   so it can only come back through WAL replay.
+3. Pauses ArgoCD for `postgres` (annotation
+   `argocd.argoproj.io/skip-reconcile`), so it cannot recreate the cluster
+   from the old values.
+4. Deletes Cluster `jobs` and its PVC.
+5. Bumps the generation in `values.yaml`, commits and pushes, and resumes
+   ArgoCD with a hard refresh.
+6. Waits for ArgoCD to create `jobs` in recovery mode and for the restore.
+   Then checks four things: it restored from the old generation, it
+   archives to the new one, both canary rows are back, and
+   `ContinuousArchiving` is True. Prints PASS or FAIL.
+7. On PASS, takes a base backup in the new generation.
+
+If the drill stops before step 4, it resumes ArgoCD and nothing is lost.
+If it stops later, ArgoCD stays paused and the drill prints what to do.
+Merge the drill's commit with your branch, so main knows the new
+generation.
+
+### The kubectl cnpg plugin
+
+Optional, for more detail (`kubectl cnpg status jobs -n data` shows
+replication, WAL and backup state on one page; `task pg:status` calls it
+when it is installed). mise has no package for it, so install it with
+[krew](https://krew.sigs.k8s.io), kubectl's plugin manager, which is
+pinned in `.mise.toml`:
+
+```bash
+# Once: krew installs plugins into ~/.krew/bin; put that on PATH
+# (in ~/.bashrc and ~/.profile, like the mise shims).
+export PATH="$HOME/.krew/bin:$PATH"
+# mise installs krew as a plain `krew` binary, so call it directly
+# (`kubectl krew` would need it named kubectl-krew).
+krew update
+krew install cnpg
+kubectl cnpg version     # should match the operator's minor, 1.30
+```
+
+krew always installs the newest plugin release. `krew upgrade cnpg`
+updates it; keep its minor version in line with the operator.
 
 ## Local model
 

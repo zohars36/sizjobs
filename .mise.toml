@@ -32,6 +32,10 @@ helm = "4.3.1"
 # Everyday status: `task argocd:status`, which needs no CLI login.
 argocd = "3.5.5"
 
+# kubectl's plugin manager. Only used to install the kubectl cnpg plugin
+# (README "Database"), which has no mise package.
+krew = "0.5.0"
+
 # Runs k3s inside Docker for the local cluster (Part A).
 k3d = "5.9.0"
 
