@@ -419,7 +419,7 @@ tasks:
         echo "    generation $server: last base backup ${last:-none yet}, restorable back to ${first:-n/a}"
         echo "==> Newest Backup resources (task pg:backups lists what is in the bucket)"
         backups=$(k get backups.postgresql.cnpg.io --sort-by=.metadata.creationTimestamp \
-          -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,SERVER:.status.pluginMetadata.serverName,STARTED:.status.startedAt,STOPPED:.status.stoppedAt' 2>/dev/null || true)
+          -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,BACKUP ID:.status.backupId,STARTED:.status.startedAt,STOPPED:.status.stoppedAt' 2>/dev/null || true)
         if [ "$(echo "$backups" | wc -l)" -le 1 ]; then
           echo "    (none)"
         else
@@ -428,7 +428,9 @@ tasks:
         fi
         if command -v kubectl-cnpg >/dev/null 2>&1; then
           echo "==> kubectl cnpg status"
-          kubectl --context {{.KCTX}} cnpg status "$cl" -n {{.PG_NAMESPACE}}
+          # kubectl hands everything after the plugin name to the plugin and
+          # rejects flags before it, so --context goes last.
+          kubectl cnpg status "$cl" -n {{.PG_NAMESPACE}} --context {{.KCTX}}
         else
           echo "==> More detail: install the kubectl cnpg plugin (README.md, Database), then kubectl cnpg status $cl -n {{.PG_NAMESPACE}}"
         fi
@@ -479,6 +481,12 @@ tasks:
           method: plugin
           pluginConfiguration:
             name: {{.PG_PLUGIN}}
+          # Ask Postgres for an immediate checkpoint at the start. The
+          # default spreads it over minutes (checkpoint_completion_target)
+          # to spare I/O, which suits 02:00 but not someone waiting.
+          online: true
+          onlineConfiguration:
+            immediateCheckpoint: true
         EOF
         echo "==> Waiting for $name to complete (up to 10 minutes)"
         seen=""

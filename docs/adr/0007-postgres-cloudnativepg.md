@@ -87,9 +87,10 @@ operator (-2), the plugin (-1) and our chart `platform/postgres` (1).
   generation at bring-up (for example from the newest folder in the
   bucket) and pass it as Helm parameters. This chart already takes both
   values, so only the caller changes.
-- Three more operators run all the time (cert-manager about 100Mi, CNPG
-  and the plugin about 100Mi together) on top of Postgres itself
-  (256Mi to 512Mi) and its sidecar.
+- Three more components run all the time: cert-manager (three pods,
+  about 90Mi measured idle) and the CNPG operator plus the plugin (about
+  60Mi together). That is on top of Postgres itself (80Mi idle, 256Mi
+  requested, 512Mi limit) and its sidecar (about 25Mi).
 - The endpoint is stated twice, in the `s3-config` ConfigMap and in the
   chart values, because ObjectStore takes a string, not a reference.
 - `TZ` on the operator applies to every ScheduledBackup in the cluster;
