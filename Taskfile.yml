@@ -885,6 +885,9 @@ tasks:
         # A real create, not a dry run. If it is wrongly admitted, the trap
         # deletes it again; the image is never pulled in the normal case.
         trap 'k delete pod "$pod" --ignore-not-found --wait=false >/dev/null 2>&1' EXIT
+        # Task's shell stops at the first failing command, and the expected
+        # outcome here is a failing create; "&& ... || ..." keeps its exit
+        # status instead of stopping.
         out=$(sed "s/POD_NAME/$pod/" <<'EOF' | k create -f - 2>&1
         apiVersion: v1
         kind: Pod
@@ -906,8 +909,7 @@ tasks:
                 limits:
                   memory: 16Mi
         EOF
-        )
-        status=$?
+        ) && status=0 || status=$?
         echo "$out" | sed 's/^/    /'
         if [ "$status" -eq 0 ]; then
           echo "==> FAIL: the privileged pod was admitted (deleting it now)"
