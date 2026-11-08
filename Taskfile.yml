@@ -38,6 +38,31 @@ vars:
   # s3:forward uses. 8333 matches the in-cluster port, so URLs look alike.
   S3_SERVICE: seaweedfs-all-in-one
   S3_LOCAL_PORT: "8333"
+  # Postgres (a2-4): the CloudNativePG cluster from platform/postgres, run by
+  # the ArgoCD Application PG_APP. Names come from its values file, so the
+  # tasks follow a rename. pg_value() in awk: print `key` from the
+  # top-level `block` (stops at the next unindented line).
+  PG_NAMESPACE: data
+  PG_APP: postgres
+  PG_VALUES: platform/postgres/values.yaml
+  PG_VALUE_AWK: >-
+    awk -v block="$block" -v key="$key"
+    '$0 ~ "^" block ":" {f=1; next} /^[^ #]/ {f=0}
+    f && $1 == key ":" {gsub(/"/, "", $2); print $2; exit}'
+  PG_CLUSTER:
+    sh: block=cluster key=name; {{.PG_VALUE_AWK}} platform/postgres/values.yaml
+  PG_BACKUP_DEST:
+    sh: |
+      block=objectStore key=bucket; bucket=$({{.PG_VALUE_AWK}} platform/postgres/values.yaml)
+      block=objectStore key=path; path=$({{.PG_VALUE_AWK}} platform/postgres/values.yaml)
+      echo "s3://$bucket/$path"
+  PG_OBJECT_STORE:
+    sh: block=objectStore key=name; {{.PG_VALUE_AWK}} platform/postgres/values.yaml
+  # The plugin's name as registered with the operator.
+  PG_PLUGIN: barman-cloud.cloudnative-pg.io
+  # For task pg:backups, which lists the bucket from a pod in the cluster.
+  # Same image as platform/seaweedfs/manifests/create-buckets.yaml.
+  AWS_CLI_IMAGE: amazon/aws-cli:2.38.1@sha256:733d5be1015825e4038c6016f3fa9954868ddee1f611b73be795a9cc2e706bfd
   BRANCH:
     sh: git rev-parse --abbrev-ref HEAD
   # Image tag: short commit, plus "-dirty" when there are uncommitted
@@ -355,6 +380,438 @@ tasks:
           # --summarize adds object count and total size at the end.
           s3 ls "s3://$bucket" --recursive --human-readable --summarize | sed 's/^/    /'
         done
+
+  # Postgres (a2-4): the CloudNativePG cluster in platform/postgres, with
+  # backups through the Barman Cloud Plugin. README.md "Database" explains
+  # the setup. These tasks read state or create Backup resources, except
+  # pg:restore-drill, which deletes the cluster and restores it.
+  pg:status:
+    desc: Show the Postgres cluster, its last successful backup and the WAL archiving condition
+    cmds:
+      - |
+        k() { kubectl --context {{.KCTX}} -n {{.PG_NAMESPACE}} "$@"; }
+        cl={{.PG_CLUSTER}}
+        # The full resource name: plain "cluster" could match another CRD.
+        if ! k get clusters.postgresql.cnpg.io "$cl" >/dev/null 2>&1; then
+          echo "==> No Cluster $cl in namespace {{.PG_NAMESPACE}}. task argocd:status shows whether the postgres app has synced."
+          exit 1
+        fi
+        echo "==> Cluster $cl in namespace {{.PG_NAMESPACE}}"
+        k get clusters.postgresql.cnpg.io "$cl" \
+          -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,READY:.status.readyInstances,INSTANCES:.status.instances,PRIMARY:.status.currentPrimary,ARCHIVES TO:.spec.plugins[0].parameters.serverName' \
+          | sed 's/^/    /'
+
+        echo "==> WAL archiving (condition ContinuousArchiving)"
+        # A jsonpath filter: the one condition whose type matches.
+        cond='{.status.conditions[?(@.type=="ContinuousArchiving")]'
+        status=$(k get clusters.postgresql.cnpg.io "$cl" -o jsonpath="$cond.status}")
+        reason=$(k get clusters.postgresql.cnpg.io "$cl" -o jsonpath="$cond.reason}")
+        message=$(k get clusters.postgresql.cnpg.io "$cl" -o jsonpath="$cond.message}")
+        echo "    ${status:-Unknown} ${reason:-} ${message:-}"
+
+        echo "==> Last successful backup"
+        server=$(k get clusters.postgresql.cnpg.io "$cl" -o jsonpath='{.spec.plugins[0].parameters.serverName}')
+        # The plugin records, per serverName, the newest completed base
+        # backup in the object store and the oldest point it can restore to.
+        window="{.status.serverRecoveryWindow['$server']"
+        last=$(k get objectstores.barmancloud.cnpg.io {{.PG_OBJECT_STORE}} -o jsonpath="$window.lastSuccessfulBackupTime}" 2>/dev/null || true)
+        first=$(k get objectstores.barmancloud.cnpg.io {{.PG_OBJECT_STORE}} -o jsonpath="$window.firstRecoverabilityPoint}" 2>/dev/null || true)
+        echo "    generation $server: last base backup ${last:-none yet}, restorable back to ${first:-n/a}"
+        echo "==> Newest Backup resources (task pg:backups lists what is in the bucket)"
+        backups=$(k get backups.postgresql.cnpg.io --sort-by=.metadata.creationTimestamp \
+          -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,BACKUP ID:.status.backupId,STARTED:.status.startedAt,STOPPED:.status.stoppedAt' 2>/dev/null || true)
+        if [ "$(echo "$backups" | wc -l)" -le 1 ]; then
+          echo "    (none)"
+        else
+          # The header, then the five newest.
+          { echo "$backups" | head -1; echo "$backups" | tail -n +2 | tail -5; } | sed 's/^/    /'
+        fi
+        if command -v kubectl-cnpg >/dev/null 2>&1; then
+          echo "==> kubectl cnpg status"
+          # kubectl hands everything after the plugin name to the plugin and
+          # rejects flags before it, so --context goes last.
+          kubectl cnpg status "$cl" -n {{.PG_NAMESPACE}} --context {{.KCTX}}
+        else
+          echo "==> More detail: install the kubectl cnpg plugin (README.md, Database), then kubectl cnpg status $cl -n {{.PG_NAMESPACE}}"
+        fi
+
+  pg:psql:
+    desc: "Open psql on the primary as postgres (DB=agent for another database; psql arguments after --)"
+    vars:
+      DB: '{{.DB | default "postgres"}}'
+    cmds:
+      - |
+        primary=$(kubectl --context {{.KCTX}} -n {{.PG_NAMESPACE}} get clusters.postgresql.cnpg.io {{.PG_CLUSTER}} \
+                    -o jsonpath='{.status.currentPrimary}' 2>/dev/null || true)
+        if [ -z "$primary" ]; then
+          echo "==> Cluster {{.PG_CLUSTER}} has no primary. task pg:status shows why."
+          exit 1
+        fi
+        echo "==> psql on $primary (primary of {{.PG_CLUSTER}}), database {{.DB}}, as postgres" >&2
+        # -i passes stdin through; -t gives psql a terminal (prompt, line
+        # editing) only when there is one, so piping SQL in works too.
+        # In the pod psql uses the local socket, where the postgres OS user
+        # logs in as the postgres superuser (peer authentication): no
+        # password, and no superuser login over the network.
+        tty=""; [ -t 0 ] && tty=-t
+        kubectl --context {{.KCTX}} -n {{.PG_NAMESPACE}} exec -i $tty "$primary" -c postgres -- \
+          psql -d {{.DB}} {{.CLI_ARGS}}
+
+  pg:backup:
+    desc: Take an on-demand base backup through the Barman Cloud Plugin and wait until it completes
+    cmds:
+      - |
+        k() { kubectl --context {{.KCTX}} -n {{.PG_NAMESPACE}} "$@"; }
+        name="{{.PG_CLUSTER}}-manual-$(date -u +%Y%m%d-%H%M%S)"
+        server=$(k get clusters.postgresql.cnpg.io {{.PG_CLUSTER}} -o jsonpath='{.spec.plugins[0].parameters.serverName}')
+        echo "==> Creating Backup $name (method plugin, into generation $server)"
+        # A Backup resource is a one-off request that CNPG and the plugin's
+        # sidecar carry out. Made here, not by ArgoCD (which ignores it),
+        # and labelled so these are easy to find and clean up.
+        k create -f - >/dev/null <<EOF
+        apiVersion: postgresql.cnpg.io/v1
+        kind: Backup
+        metadata:
+          name: $name
+          labels:
+            app.kubernetes.io/managed-by: sizjobs-task-pg-backup
+        spec:
+          cluster:
+            name: {{.PG_CLUSTER}}
+          method: plugin
+          pluginConfiguration:
+            name: {{.PG_PLUGIN}}
+          # Ask Postgres for an immediate checkpoint at the start. The
+          # default spreads it over minutes (checkpoint_completion_target)
+          # to spare I/O, which suits 02:00 but not someone waiting.
+          online: true
+          onlineConfiguration:
+            immediateCheckpoint: true
+        EOF
+        echo "==> Waiting for $name to complete (up to 10 minutes)"
+        seen=""
+        for i in $(seq 1 200); do
+          phase=$(k get backups.postgresql.cnpg.io "$name" -o jsonpath='{.status.phase}')
+          # Print each phase once as it changes.
+          if [ -n "$phase" ] && [ "$phase" != "$seen" ]; then
+            echo "    phase: $phase"
+            seen=$phase
+          fi
+          case "$phase" in
+            completed)
+              k get backups.postgresql.cnpg.io "$name" \
+                -o jsonpath='    backup ID {.status.backupId}, WAL {.status.beginWal} to {.status.endWal}, {.status.startedAt} to {.status.stoppedAt}{"\n"}'
+              echo "==> Backup $name completed."
+              exit 0 ;;
+            failed)
+              echo "==> Backup $name failed: $(k get backups.postgresql.cnpg.io "$name" -o jsonpath='{.status.error}')"
+              echo "    Sidecar logs: kubectl --context {{.KCTX}} -n {{.PG_NAMESPACE}} logs {{.PG_CLUSTER}}-1 -c plugin-barman-cloud --tail=50"
+              exit 1 ;;
+          esac
+          sleep 3
+        done
+        echo "==> Backup $name did not finish within 10 minutes (last phase: ${seen:-none})."
+        exit 1
+
+  pg:backups:
+    desc: List the base backups and WAL in the backup bucket, per generation (serverName)
+    cmds:
+      - |
+        k() { kubectl --context {{.KCTX}} -n {{.PG_NAMESPACE}} "$@"; }
+        pod="pg-backups-ls-$(date +%s)"
+        echo "==> Listing {{.PG_BACKUP_DEST}} from a short-lived pod ($pod) in namespace {{.PG_NAMESPACE}}"
+        # The pod reads the endpoint and keys from s3-config and the s3
+        # Secret, as CNPG does, so no keys reach the laptop and no
+        # port-forward is needed. It is deleted on exit, also on Ctrl+C.
+        trap 'k delete pod "$pod" --ignore-not-found --wait=false >/dev/null 2>&1' EXIT
+        # Quoted 'EOF': the shell leaves the pod's script alone ($base etc.
+        # are the pod's variables); sed fills in the pod name.
+        sed "s/POD_NAME/$pod/" <<'EOF' | k create -f - >/dev/null
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: POD_NAME
+          labels:
+            app.kubernetes.io/managed-by: sizjobs-task-pg-backups
+        spec:
+          restartPolicy: Never
+          # Killed after 2 minutes, so a stuck pod never lingers.
+          activeDeadlineSeconds: 120
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: aws
+              image: {{.AWS_CLI_IMAGE}}
+              command: ["/bin/sh", "-ec"]
+              args:
+                - |
+                  base="{{.PG_BACKUP_DEST}}"
+                  # Folders right under base are generations (serverName).
+                  servers=$(aws s3 ls "$base/" | awk '$1 == "PRE" {sub("/$", "", $2); print $2}')
+                  if [ -z "$servers" ]; then
+                    echo "    (no backups yet)"
+                    exit 0
+                  fi
+                  for srv in $servers; do
+                    echo "==> generation (serverName) $srv"
+                    # A base backup is a folder named by its backup ID, with
+                    # backup.info (key=value lines) and the compressed data.
+                    ids=$(aws s3 ls "$base/$srv/base/" 2>/dev/null | awk '$1 == "PRE" {sub("/$", "", $2); print $2}' || true)
+                    [ -z "$ids" ] && echo "    base backups: none"
+                    for id in $ids; do
+                      info=$(aws s3 cp "$base/$srv/base/$id/backup.info" - 2>/dev/null || true)
+                      field() { echo "$info" | sed -n "s/^$1=//p"; }
+                      # Bytes stored in the bucket for this backup (compressed).
+                      mib=$(aws s3 ls "$base/$srv/base/$id/" --recursive --summarize \
+                              | awk '/Total Size:/ {printf "%.1f", $3 / 1048576}')
+                      echo "    base $id  $(field status)  ended $(field end_time)  $mib MiB  WAL $(field begin_wal) to $(field end_wal)"
+                    done
+                    # --summarize ends with "Total Objects: N" and "Total Size: B".
+                    aws s3 ls "$base/$srv/wals/" --recursive --summarize 2>/dev/null \
+                      | awk '/Total Objects:/ {n = $3} /Total Size:/ {s = $3}
+                             END {printf "    WAL files: %d (%.1f MiB)\n", n, s / 1048576}'
+                  done
+              env:
+                - name: AWS_ENDPOINT_URL
+                  valueFrom:
+                    configMapKeyRef:
+                      name: s3-config
+                      key: S3_ENDPOINT
+                - name: AWS_REGION
+                  valueFrom:
+                    configMapKeyRef:
+                      name: s3-config
+                      key: S3_REGION
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: s3
+                      key: S3_ACCESS_KEY
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: s3
+                      key: S3_SECRET_KEY
+                # The CLI writes a cache under $HOME; only /tmp is writable.
+                - name: HOME
+                  value: /tmp
+                - name: AWS_PAGER
+                  value: ""
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir:
+                sizeLimit: 16Mi
+        EOF
+        # Wait for the pod to finish, then print its output.
+        for i in $(seq 1 60); do
+          phase=$(k get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+          case "$phase" in Succeeded|Failed) break ;; esac
+          sleep 2
+        done
+        k logs "$pod"
+        if [ "$phase" != Succeeded ]; then
+          echo "==> Listing failed (pod phase ${phase:-unknown})."
+          exit 1
+        fi
+
+  pg:restore-drill:
+    desc: "Restore drill: canary rows, backup, delete the cluster and its PVC, restore it in the next generation through git and ArgoCD, check the rows (PASS/FAIL)"
+    # Task asks y/N before anything runs; `task pg:restore-drill --yes`
+    # answers yes. Nothing is deleted before the backup and the WAL archive
+    # are confirmed good, and the drill stops instead if they are not.
+    prompt: >-
+      The drill writes two canary rows, takes a backup, then DELETES Cluster {{.PG_CLUSTER}} and its PVC,
+      commits and pushes a generation bump of {{.PG_VALUES}} to branch {{.BRANCH}},
+      and lets ArgoCD restore the cluster from the backup. Continue?
+    preconditions:
+      - sh: test "{{.BRANCH}}" != main && test "{{.BRANCH}}" != HEAD
+        msg: "The drill commits and pushes a generation bump. Run it on a branch that ArgoCD tracks (git switch -c <branch>, push it, task dev:up), not on main."
+      - sh: >-
+          test "$(kubectl --context {{.KCTX}} -n {{.ARGOCD_NAMESPACE}} get applications.argoproj.io root
+          -o jsonpath='{.spec.source.targetRevision}')" = "{{.BRANCH}}"
+        msg: "ArgoCD does not track branch {{.BRANCH}}. Run task dev:up on this branch first."
+      - sh: git diff --quiet HEAD -- {{.PG_VALUES}}
+        msg: "{{.PG_VALUES}} has uncommitted changes. The drill commits that file; commit or stash your changes first."
+      - sh: test "$(git rev-parse HEAD)" = "$(git ls-remote origin refs/heads/{{.BRANCH}} | cut -f1)"
+        msg: "HEAD is not what origin/{{.BRANCH}} points to. Push (or pull) first, so the drill's push holds only its own commit."
+    cmds:
+      - |
+        set -eu
+        k() { kubectl --context {{.KCTX}} "$@"; }
+        ns={{.PG_NAMESPACE}}
+        cl={{.PG_CLUSTER}}
+        app={{.PG_APP}}
+        values={{.PG_VALUES}}
+        cluster() { k -n "$ns" get clusters.postgresql.cnpg.io "$cl" "$@"; }
+        # psql on the primary, unaligned output without headers (-At), and
+        # stop at the first error (ON_ERROR_STOP).
+        sql() {
+          primary=$(cluster -o jsonpath='{.status.currentPrimary}')
+          k -n "$ns" exec "$primary" -c postgres -- psql -v ON_ERROR_STOP=1 -qAt -d postgres -c "$1"
+        }
+        condition() { cluster -o jsonpath="{.status.conditions[?(@.type==\"$1\")].status}" 2>/dev/null || true; }
+
+        # Generations: archiveTo jobs-gN becomes restoreFrom, and the
+        # cluster archives into jobs-gN+1 from now on.
+        block=bootstrap key=archiveTo; current=$({{.PG_VALUE_AWK}} "$values")
+        case "$current" in
+          *-g[0-9]*) ;;
+          *) echo "==> bootstrap.archiveTo in $values is '$current', expected a name ending in -g<number>."; exit 1 ;;
+        esac
+        n=${current##*-g}
+        next="${current%-g*}-g$((n + 1))"
+        echo "==> Restore drill on cluster $cl: restore from $current, archive to $next afterwards"
+
+        echo "==> [1/8] Checking that $cl is Ready and archiving WAL"
+        if [ "$(condition Ready)" != True ] || [ "$(condition ContinuousArchiving)" != True ]; then
+          echo "==> FAIL: $cl must be Ready with ContinuousArchiving True before a drill. task pg:status shows why it is not."
+          exit 1
+        fi
+        echo "    Ready, ContinuousArchiving True"
+
+        token="drill-$(date -u +%Y%m%dT%H%M%SZ)"
+        echo "==> [2/8] Writing canary row 1 ($token, base-backup): it must come back from the base backup"
+        sql "CREATE TABLE IF NOT EXISTS restore_drill (token text, phase text, written_at timestamptz DEFAULT now(), PRIMARY KEY (token, phase))"
+        sql "INSERT INTO restore_drill (token, phase) VALUES ('$token', 'base-backup')"
+
+        echo "==> [3/8] Taking a base backup"
+        "{{.TASK_EXE}}" pg:backup
+
+        echo "==> [4/8] Writing canary row 2 ($token, wal): written after the backup, so only WAL replay can bring it back"
+        sql "INSERT INTO restore_drill (token, phase) VALUES ('$token', 'wal')"
+        # Close the current WAL segment now instead of when it fills up
+        # (16MB) or at archive_timeout, so it is archived right away.
+        wal=$(sql "SELECT pg_walfile_name(pg_current_wal_lsn())")
+        sql "SELECT pg_switch_wal()" >/dev/null
+        echo "    waiting for WAL segment $wal to be archived"
+        for i in $(seq 1 60); do
+          last=$(sql "SELECT coalesce(last_archived_wal, '') FROM pg_stat_archiver")
+          # WAL file names sort in write order; a later one means ours is in.
+          if [ -n "$last" ] && [ "$(printf '%s\n%s\n' "$wal" "$last" | sort | tail -1)" = "$last" ]; then
+            break
+          fi
+          sleep 2
+        done
+        if [ "$(printf '%s\n%s\n' "$wal" "$last" | sort | tail -1)" != "$last" ]; then
+          echo "==> FAIL: $wal was not archived within 2 minutes (last archived: ${last:-none}). Nothing was deleted."
+          exit 1
+        fi
+        echo "    archived (last archived WAL: $last)"
+
+        echo "==> [5/8] Pausing ArgoCD for app $app, so it does not recreate $cl from the old values"
+        # skip-reconcile makes the controller leave the Application alone.
+        # An annotation, not a spec change, so the root app's selfHeal does
+        # not undo it.
+        k -n {{.ARGOCD_NAMESPACE}} annotate applications.argoproj.io "$app" argocd.argoproj.io/skip-reconcile=true --overwrite >/dev/null
+        deleted=no
+        # If anything fails before the delete, resume ArgoCD; after it,
+        # keep it paused (resuming would recreate an empty cluster) and say
+        # how to continue.
+        resume() {
+          k -n {{.ARGOCD_NAMESPACE}} annotate applications.argoproj.io "$app" \
+            argocd.argoproj.io/skip-reconcile- argocd.argoproj.io/refresh=hard --overwrite >/dev/null
+        }
+        on_exit() {
+          status=$?
+          [ "$status" -eq 0 ] && return
+          if [ "$deleted" = no ]; then
+            echo "==> Stopped before deleting anything; resuming ArgoCD for $app."
+            resume
+          elif [ "$deleted" = yes ]; then
+            echo "==> Stopped after deleting $cl. ArgoCD is still paused for $app."
+            echo "    Finish by hand: README.md, Database, Bumping the generation; then"
+            echo "    kubectl --context {{.KCTX}} -n {{.ARGOCD_NAMESPACE}} annotate applications.argoproj.io $app argocd.argoproj.io/skip-reconcile- argocd.argoproj.io/refresh=hard"
+          fi
+        }
+        trap on_exit EXIT
+
+        echo "==> [6/8] Deleting Cluster $cl and its PVC"
+        deleted=yes
+        k -n "$ns" delete clusters.postgresql.cnpg.io "$cl" --wait=true --timeout=3m
+        # The PVC has an owner reference to the Cluster, so Kubernetes
+        # deletes it too; delete it explicitly anyway and wait, so no old
+        # data can be picked up by the new cluster.
+        k -n "$ns" delete pvc -l cnpg.io/cluster="$cl" --ignore-not-found --wait=true --timeout=2m
+        for i in $(seq 1 60); do
+          [ -z "$(k -n "$ns" get pods,pvc -l cnpg.io/cluster="$cl" -o name 2>/dev/null)" ] && break
+          sleep 2
+        done
+        echo "    gone: no pods or PVCs left with label cnpg.io/cluster=$cl"
+
+        echo "==> [7/8] Bumping the generation in $values (recovery from $current, archive to $next); commit and push"
+        # Rewrite the three bootstrap keys, only inside the bootstrap block.
+        tmp=$(mktemp)
+        awk -v from="$current" -v to="$next" '
+          /^bootstrap:/ {f = 1; print; next}
+          /^[^ #]/ {f = 0}
+          f && $1 == "mode:" {print "  mode: recovery"; next}
+          f && $1 == "restoreFrom:" {print "  restoreFrom: " from; next}
+          f && $1 == "archiveTo:" {print "  archiveTo: " to; next}
+          {print}' "$values" > "$tmp"
+        cat "$tmp" > "$values"
+        rm -f "$tmp"
+        git --no-pager diff -- "$values"
+        # `git commit -- <file>` commits only that file, whatever else is
+        # staged. The pre-commit hooks run as usual.
+        git commit --quiet -m "pg: restore drill, archive generation $current -> $next" -- "$values"
+        git push --quiet origin "{{.BRANCH}}"
+        deleted=pushed
+        echo "    pushed $(git rev-parse --short HEAD) to origin/{{.BRANCH}}"
+        echo "    resuming ArgoCD for $app with a hard refresh, so it reads the new commit before it syncs"
+        resume
+
+        echo "==> [8/8] Waiting for ArgoCD to create $cl in recovery mode, and for the restore to finish"
+        for i in $(seq 1 90); do
+          cluster >/dev/null 2>&1 && break
+          sleep 2
+        done
+        source_server=$(cluster -o jsonpath='{.spec.externalClusters[0].plugin.parameters.serverName}')
+        archive_server=$(cluster -o jsonpath='{.spec.plugins[0].parameters.serverName}')
+        echo "    created: restores from ${source_server:-nothing (initdb!)}, archives to ${archive_server:-?}"
+        # A full recovery downloads the base backup and replays WAL in a Job,
+        # then starts the instance; minutes, not seconds.
+        k -n "$ns" wait --for=condition=Ready clusters.postgresql.cnpg.io "$cl" --timeout=15m
+        rows=$(sql "SELECT string_agg(phase, ',' ORDER BY phase) FROM restore_drill WHERE token = '$token'" || true)
+        echo "    canary rows found for $token: ${rows:-none}"
+        echo "    waiting for WAL archiving into $next"
+        for i in $(seq 1 60); do
+          [ "$(condition ContinuousArchiving)" = True ] && break
+          sleep 3
+        done
+        archiving=$(condition ContinuousArchiving)
+
+        result=PASS
+        check() { if [ "$2" = "$3" ]; then echo "    ok    $1"; else echo "    FAIL  $1 (got '$2', want '$3')"; result=FAIL; fi; }
+        echo "==> Checks"
+        check "restored from generation $current" "$source_server" "$current"
+        check "archives to generation $next" "$archive_server" "$next"
+        check "canary rows (base backup and WAL)" "$rows" "base-backup,wal"
+        check "ContinuousArchiving" "$archiving" True
+        if [ "$result" = PASS ]; then
+          echo "==> Taking a base backup in the new generation $next, so it does not depend on $current's WAL"
+          "{{.TASK_EXE}}" pg:backup
+        fi
+        echo "==> Restore drill: $result"
+        [ "$result" = PASS ]
 
   # ArgoCD bootstrap (a2-2). Helm installs ArgoCD itself; after that,
   # everything in the cluster comes from git through the root Application.

@@ -1,0 +1,43 @@
+# Where backups go: one ObjectStore for both WAL archiving and base backups,
+# shared by every generation (each writes its own serverName folder under
+# destinationPath). Its fields are the old in-tree barmanObjectStore ones.
+{{- $os := .Values.objectStore }}
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: {{ $os.name }}
+  annotations:
+    # Before the Cluster (wave 1), which refers to it.
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  retentionPolicy: {{ $os.retentionPolicy | quote }}
+  configuration:
+    destinationPath: {{ printf "s3://%s/%s" $os.bucket $os.path | quote }}
+    {{- with $os.endpointURL }}
+    endpointURL: {{ . | quote }}
+    {{- end }}
+    # Leave configuration.serverName empty: with the plugin, the folder name
+    # comes from the serverName parameter in the Cluster (see cluster.yaml).
+    s3Credentials:
+      {{- if $os.credentialsSecret }}
+      accessKeyId:
+        name: {{ $os.credentialsSecret }}
+        key: {{ $os.accessKeyIdKey }}
+      secretAccessKey:
+        name: {{ $os.credentialsSecret }}
+        key: {{ $os.secretAccessKeyKey }}
+      {{- else }}
+      # No keys: use the IAM role of the node or service account (Part B).
+      inheritFromIAMRole: true
+      {{- end }}
+    wal:
+      # Each 16MB WAL segment compresses to a few hundred KB when idle.
+      compression: gzip
+      # Upload up to 2 segments in parallel when WAL piles up.
+      maxParallel: 2
+    data:
+      # Base backups as gzip-compressed tar files.
+      compression: gzip
+  instanceSidecarConfiguration:
+    resources:
+      {{- toYaml $os.sidecarResources | nindent 6 }}

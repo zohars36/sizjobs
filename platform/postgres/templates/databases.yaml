@@ -1,0 +1,20 @@
+# One Database resource per application database. CNPG creates the database
+# if it is missing and keeps its owner; it never drops one on its own
+# (databaseReclaimPolicy defaults to retain, also when this resource is
+# deleted).
+{{- range .Values.databases }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: {{ $.Values.cluster.name }}-{{ .name }}
+  annotations:
+    # After the Cluster is healthy, so its owner role exists.
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  cluster:
+    name: {{ $.Values.cluster.name }}
+  name: {{ .name }}
+  owner: {{ .owner }}
+  ensure: present
+{{- end }}

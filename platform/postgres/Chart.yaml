@@ -1,0 +1,13 @@
+# The "jobs" Postgres cluster (CloudNativePG), its object store for backups,
+# the daily ScheduledBackup and the application databases. Deployed by
+# platform/apps/templates/postgres.yaml; see README.md "Database".
+#
+# Render it by hand to check a change:
+#   helm template platform/postgres
+#   helm template platform/postgres --set bootstrap.mode=recovery --set bootstrap.restoreFrom=jobs-g1 --set bootstrap.archiveTo=jobs-g2
+apiVersion: v2
+name: postgres
+description: CloudNativePG cluster "jobs" with Barman Cloud Plugin backups
+type: application
+# Never published, so the version never needs bumping.
+version: 0.1.0

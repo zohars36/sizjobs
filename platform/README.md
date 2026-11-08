@@ -11,6 +11,7 @@ platform/
   apps/                          Helm chart: one template per child Application
   <app>/values.yaml              values a child reads from this repo, e.g. demo/
   <app>/manifests/               plain manifests a child deploys next to its chart, e.g. seaweedfs/
+  postgres/                      a chart of our own (Cluster jobs and its backups), see README.md "Database"
 ```
 
 Every workload sets memory requests and limits: the cluster has 7 GiB.
@@ -117,9 +118,17 @@ check in `bootstrap/argocd-values.yaml`).
 
 | Wave | What | Examples |
 |---|---|---|
-| -2 | Namespaces and CRDs | namespaces with Pod Security labels (a2-5) |
-| -1 | Operators | CloudNativePG operator |
-| 0 | Infrastructure | SeaweedFS (S3), Postgres clusters, LiteLLM |
-| 1+ | Workloads | demo, the agent |
+| -4 | Namespaces | namespaces with Pod Security labels (a2-5) |
+| -3 | Operator prerequisites | cert-manager |
+| -2 | Operators | CloudNativePG operator |
+| -1 | Operator plugins | Barman Cloud Plugin (needs cert-manager and the operator) |
+| 0 | Storage | SeaweedFS (S3) |
+| 1 | Databases | Postgres cluster `jobs` (restores from S3 in wave 0) |
+| 2+ | Workloads | LiteLLM, the agent (need Postgres); demo stays in 1 |
 
 Use the lowest wave that is still after everything the app needs.
+
+An app whose chart cannot be fetched or rendered (a ComparisonError) has
+no resources yet and reports Healthy, so the next wave starts anyway.
+Its own sync still fails and is retried. Check `task argocd:status` for
+SYNC `Unknown`.

@@ -1,0 +1,56 @@
+# Barman Cloud Plugin: backups and WAL archiving to S3-compatible object
+# stores for CloudNativePG, through the CNPG-I plugin interface. It replaces
+# the in-tree spec.backup.barmanObjectStore, deprecated since CNPG 1.26.
+# It adds the ObjectStore CRD (barmancloud.cnpg.io/v1) and injects a sidecar
+# into every Postgres pod that uses it. See docs/adr/0007-postgres-cloudnativepg.md.
+#
+# Must run in the operator's namespace: the operator finds plugins by the
+# labels on Services in its own namespace.
+#
+# Comments must not contain double curly braces: Helm parses them too.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: barman-cloud-plugin
+  namespace: argocd
+  annotations:
+    # Needs cert-manager (-3) for its TLS certificates and the operator (-2)
+    # to register with.
+    argocd.argoproj.io/sync-wave: "-1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://cloudnative-pg.github.io/charts
+      chart: plugin-barman-cloud
+      # Chart 0.8.1 installs plugin v0.15.1.
+      targetRevision: 0.8.1
+      helm:
+        releaseName: barman-cloud
+        valueFiles:
+          - $values/platform/barman-cloud-plugin/values.yaml
+    - repoURL: "{{ .Values.repoURL }}"
+      targetRevision: "{{ .Values.revision }}"
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cnpg-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    # Retry a failed sync instead of waiting for the next commit. Without
+    # this, a sync that fails once (a CRD from an earlier wave not there
+    # yet, a chart download timing out) stays failed until git changes.
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m
+    syncOptions:
+      - CreateNamespace=true
+      # Same reason as the operator: a large CRD.
+      - ServerSideApply=true

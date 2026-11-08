@@ -1,0 +1,94 @@
+{{- include "postgres.checkBootstrap" . }}
+{{- $b := .Values.bootstrap }}
+{{- $c := .Values.cluster }}
+{{- $owner := first .Values.databases }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $c.name }}
+  annotations:
+    # After the ObjectStore (wave 0); the Databases and ScheduledBackup
+    # (wave 2) wait until this Cluster is healthy.
+    argocd.argoproj.io/sync-wave: "1"
+    # The one resource that holds data. Prune=false: if it disappears from
+    # git (a rename, a bad merge), ArgoCD reports it instead of deleting it.
+    # Delete=false: deleting the postgres Application leaves it in place.
+    # Delete it by hand when you mean it (task pg:restore-drill does).
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+spec:
+  instances: {{ $c.instances }}
+  imageName: {{ $c.imageName }}
+
+  storage:
+    size: {{ $c.storageSize }}
+    {{- with $c.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+
+  resources:
+    {{- toYaml $c.resources | nindent 4 }}
+
+  postgresql:
+    parameters:
+      {{- range $k, $v := $c.parameters }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+
+  {{- if eq $b.mode "initdb" }}
+  bootstrap:
+    # A new cluster. CNPG always creates one application database at initdb;
+    # make it the first one in values.yaml instead of CNPG's default "app",
+    # owned by the same role and password. Its Database resource
+    # (databases.yaml) then manages it like the others.
+    initdb:
+      database: {{ $owner.name }}
+      owner: {{ $owner.owner }}
+      secret:
+        name: {{ $owner.passwordSecret }}
+  {{- else }}
+  bootstrap:
+    # Restore the latest base backup of the "origin" external cluster below,
+    # then replay its archived WAL to the end of the archive.
+    recovery:
+      source: origin
+      # The application database and owner, as at initdb. Without these
+      # CNPG assumes its default "app" database and makes a Secret for an
+      # "app" role this cluster never had.
+      database: {{ $owner.name }}
+      owner: {{ $owner.owner }}
+      secret:
+        name: {{ $owner.passwordSecret }}
+  externalClusters:
+    # Not a running server: the generation to read backups from.
+    - name: origin
+      plugin:
+        name: {{ include "postgres.pluginName" . }}
+        parameters:
+          barmanObjectName: {{ .Values.objectStore.name }}
+          serverName: {{ $b.restoreFrom }}
+  {{- end }}
+
+  # WAL archiving and base backups through the Barman Cloud Plugin
+  # (CNPG-I), not the deprecated in-tree spec.backup.barmanObjectStore.
+  plugins:
+    - name: {{ include "postgres.pluginName" . }}
+      # This plugin ships every completed WAL segment (archive_command).
+      # Only one plugin per Cluster may be the WAL archiver.
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: {{ .Values.objectStore.name }}
+        # The generation folder this cluster writes to; see values.yaml.
+        serverName: {{ $b.archiveTo }}
+
+  # Roles CNPG keeps in line with this list on every reconcile. Each
+  # password comes from a basic-auth Secret; with the cnpg.io/reload label
+  # (config/secrets-map.yaml) a changed password is applied right away.
+  managed:
+    roles:
+      {{- range .Values.databases }}
+      - name: {{ .owner }}
+        ensure: present
+        login: true
+        passwordSecret:
+          name: {{ .passwordSecret }}
+      {{- end }}

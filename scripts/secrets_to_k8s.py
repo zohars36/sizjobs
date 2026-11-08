@@ -82,7 +82,26 @@ def ensure_namespace(context, namespace, created):
     created.add(namespace)
 
 
-def apply_secret(context, name, namespace, data):
+def key_pairs(entry):
+    """(key in the Secret, key in the .env) for each item of an entry's keys.
+
+    An item is either a name, kept as is, or a one-item mapping
+    {SECRET_KEY: ENV_KEY}; see the header of config/secrets-map.yaml.
+    """
+    pairs = []
+    for item in entry["keys"]:
+        if isinstance(item, str):
+            pairs.append((item, item))
+        elif isinstance(item, dict) and len(item) == 1:
+            pairs.append(next(iter(item.items())))
+        else:
+            fail(
+                f"{entry['name']}: each item of keys is NAME or {{SECRET_KEY: ENV_KEY}}"
+            )
+    return pairs
+
+
+def apply_secret(context, name, namespace, data, secret_type, labels):
     # mkstemp creates the file with mode 600, readable only by us.
     fd, tmp = tempfile.mkstemp(dir="/dev/shm", prefix="sizjobs-secret-")
     try:
@@ -94,6 +113,11 @@ def apply_secret(context, name, namespace, data):
         manifest = kubectl(
             context, "create", "secret", "generic", name,
             "--namespace", namespace, f"--from-env-file={tmp}",
+            # "generic" is kubectl's word for any Secret built from
+            # key/value pairs; --type sets the actual type, e.g.
+            # kubernetes.io/basic-auth. The type of an existing Secret
+            # cannot change: delete it first if the map changes it.
+            f"--type={secret_type}",
             "--dry-run=client", "--output=yaml",
         )  # fmt: skip
     finally:
@@ -101,6 +125,7 @@ def apply_secret(context, name, namespace, data):
     labelled = kubectl(
         context, "label", "--local", "--filename=-", "--output=yaml",
         f"app.kubernetes.io/managed-by={MANAGER}",
+        *(f"{k}={v}" for k, v in labels.items()),
         stdin=manifest,
     )  # fmt: skip
     # --server-side: plain `kubectl apply` copies the whole object, values
@@ -138,7 +163,7 @@ def main():
     env = read_env(args.env_file)
     secrets = yaml.safe_load(args.map.read_text(encoding="utf-8"))["secrets"]
 
-    mapped = {k for s in secrets for k in s["keys"]}
+    mapped = {env_key for s in secrets for _, env_key in key_pairs(s)}
     unknown = sorted(set(env) - mapped)
     if unknown:
         print(
@@ -150,9 +175,13 @@ def main():
     created = set()
     applied = skipped = 0
     for s in secrets:
-        name, namespace, keys = s["name"], s["namespace"], s["keys"]
-        data = {k: env[k] for k in keys if env.get(k)}
-        missing = [k for k in keys if k not in data]
+        name, namespace = s["name"], s["namespace"]
+        secret_type = s.get("type", "Opaque")
+        literals = {k: str(v) for k, v in s.get("literals", {}).items()}
+        labels = {k: str(v) for k, v in s.get("labels", {}).items()}
+        pairs = key_pairs(s)
+        data = {sk: env[ek] for sk, ek in pairs if env.get(ek)}
+        missing = [ek for _, ek in pairs if not env.get(ek)]
         where = f"{namespace}/{name}"
         if not data:
             print(f"==> SKIP {where}: no values yet for {', '.join(missing)}")
@@ -160,12 +189,24 @@ def main():
             continue
         if missing:
             print(f"==> WARNING {where}: missing {', '.join(missing)}")
+        # Names only: the Secret key, and the .env key it came from when
+        # they differ. Literals are not secret but are not printed either.
+        names = ", ".join(
+            sk if sk == ek else f"{sk} (from {ek})" for sk, ek in pairs if sk in data
+        )
+        if literals:
+            names += f"; fixed: {', '.join(literals)}"
+        if secret_type != "Opaque":
+            names += f"; type {secret_type}"
         if dry_run:
-            print(f"==> would apply {where}: {', '.join(data)}")
+            print(f"==> would apply {where}: {names}")
         else:
             ensure_namespace(args.context, namespace, created)
-            print(f"==> Applying {where}: {', '.join(data)}")
-            apply_secret(args.context, name, namespace, data)
+            print(f"==> Applying {where}: {names}")
+            apply_secret(
+                args.context, name, namespace, {**literals, **data},
+                secret_type, labels,
+            )  # fmt: skip
         applied += 1
 
     verb = "would apply" if dry_run else "applied"
