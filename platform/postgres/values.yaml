@@ -33,8 +33,8 @@
 # steps to do it by hand. The template refuses restoreFrom == archiveTo.
 bootstrap:
   mode: recovery
-  restoreFrom: jobs-g2
-  archiveTo: jobs-g3
+  restoreFrom: jobs-g3
+  archiveTo: jobs-g4
 
 # ---------------------------------------------------------------------------
 cluster:
