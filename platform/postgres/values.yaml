@@ -32,9 +32,9 @@
 # task pg:restore-drill does this bump itself; README.md "Database" has the
 # steps to do it by hand. The template refuses restoreFrom == archiveTo.
 bootstrap:
-  mode: initdb
-  restoreFrom: ""
-  archiveTo: jobs-g1
+  mode: recovery
+  restoreFrom: jobs-g1
+  archiveTo: jobs-g2
 
 # ---------------------------------------------------------------------------
 cluster:
