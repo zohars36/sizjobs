@@ -560,13 +560,15 @@ tasks:
                   for srv in $servers; do
                     echo "==> generation (serverName) $srv"
                     # A base backup is a folder named by its backup ID, with
-                    # backup.info (key=value lines) and data.tar.gz.
+                    # backup.info (key=value lines) and the compressed data.
                     ids=$(aws s3 ls "$base/$srv/base/" 2>/dev/null | awk '$1 == "PRE" {sub("/$", "", $2); print $2}' || true)
                     [ -z "$ids" ] && echo "    base backups: none"
                     for id in $ids; do
                       info=$(aws s3 cp "$base/$srv/base/$id/backup.info" - 2>/dev/null || true)
                       field() { echo "$info" | sed -n "s/^$1=//p"; }
-                      mib=$(awk -v b="$(field size)" 'BEGIN {printf "%.1f", b / 1048576}')
+                      # Bytes stored in the bucket for this backup (compressed).
+                      mib=$(aws s3 ls "$base/$srv/base/$id/" --recursive --summarize \
+                              | awk '/Total Size:/ {printf "%.1f", $3 / 1048576}')
                       echo "    base $id  $(field status)  ended $(field end_time)  $mib MiB  WAL $(field begin_wal) to $(field end_wal)"
                     done
                     # --summarize ends with "Total Objects: N" and "Total Size: B".
