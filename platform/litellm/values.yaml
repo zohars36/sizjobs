@@ -1,0 +1,214 @@
+# Values for LiteLLM's official Helm chart (litellm-helm 1.106.6), deployed
+# by platform/apps/templates/litellm.yaml into namespace llm. Only what we
+# change from the chart's defaults is here; `helm show values
+# oci://ghcr.io/berriai/litellm-helm --version 1.106.6` lists the rest.
+#
+# Render it by hand to check a change:
+#   helm template litellm oci://ghcr.io/berriai/litellm-helm --version 1.106.6 \
+#     --namespace llm --values platform/litellm/values.yaml
+#
+# Taskfile.yml (task llm:verify-image) reads image.repository and image.tag
+# with awk: keep them plain `key: value` lines, two-space indented.
+
+# ---------------------------------------------------------------------------
+# Image
+image:
+  # The non-root variant: the default ghcr.io/berriai/litellm image runs as
+  # root, which Pod Security "restricted" in llm rejects. This one runs as
+  # UID 65534 (nobody) and keeps the admin UI and Prisma in paths that UID
+  # owns.
+  repository: ghcr.io/berriai/litellm-non_root
+  # The chart renders "repository:tag", so tag carries the digest too. The
+  # digest (of the multi-arch index) is what the node actually pulls; the
+  # tag is only there for people reading this. Checked with
+  # task llm:verify-image (cosign, LiteLLM's key from commit e82a3c6).
+  # 1.106.6, 2026-10-28: after the 2026-10-21 compromise, signed with the
+  # rotated key, and past the critical GHSA-w4c7-34wj-hqm8 (fixed in
+  # 1.106.5, so the "pin 1.106.2" advice from the incident post is not
+  # enough any more). README.md "AI gateway" explains the choice.
+  tag: v1.106.6@sha256:6363e53f135dafbf4a68fac25f77aec3f2b99be37665e8c5f623a952637c220b
+  # The digest never changes, so a pull per start would only cost time.
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+# One uvicorn worker process (--num_workers 1). Each worker is a full copy
+# of the proxy, a few hundred MiB; one is plenty for one agent.
+numWorkers: 1
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    memory: 1Gi
+
+# ---------------------------------------------------------------------------
+# Pod Security "restricted" (README.md "Cluster security").
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  # With this set the chart also mounts small emptyDirs at /tmp, /.cache
+  # and /.npm, the only places LiteLLM and Prisma write to. The admin UI
+  # is pre-built in the image (/var/lib/litellm/ui), so it needs no writes.
+  readOnlyRootFilesystem: true
+
+# A ServiceAccount of its own, without an API token: LiteLLM never talks to
+# the Kubernetes API, so a stolen pod gets no credentials for it.
+serviceAccount:
+  create: true
+  automount: false
+
+terminationGracePeriodSeconds: 30
+
+# ClusterIP only (the chart's default): reachable inside the cluster, and
+# then only from the pods the NetworkPolicies allow (platform/security,
+# networkpolicies-llm.yaml). From the laptop: task llm:forward.
+service:
+  type: ClusterIP
+  port: 4000
+
+# Probes: the chart's defaults, on LiteLLM's own health endpoints. Neither
+# needs a key.
+#   /health/liveliness  the process answers (liveness, restart if not)
+#   /health/readiness   ready to serve, including the database connection
+#                       (readiness, and the startup probe that gives the
+#                       first start up to 5 minutes for DB migrations)
+livenessProbe:
+  path: /health/liveliness
+readinessProbe:
+  path: /health/readiness
+startupProbe:
+  path: /health/readiness
+
+# ---------------------------------------------------------------------------
+# Database: the litellm database in the jobs cluster (platform/postgres).
+db:
+  # Not the chart's bundled Bitnami Postgres.
+  deployStandalone: false
+  useExisting: true
+  # The jobs-rw Service always points at the primary.
+  endpoint: jobs-rw.data.svc.cluster.local:5432
+  database: litellm
+  # The pg-litellm Secret in llm (task secrets; a copy of the one CNPG
+  # reads in data). The chart sets DATABASE_USERNAME and
+  # DATABASE_PASSWORD from it, then DATABASE_URL from the template below.
+  secret:
+    name: pg-litellm
+    usernameKey: username
+    passwordKey: password
+  # $(NAME) is Kubernetes' own env var expansion: the kubelet fills in the
+  # variables defined just before this one when it starts the container.
+  # The password is never in git, in the pod spec or in any output; only
+  # inside the container's environment. It is hex (.env.example), so it
+  # needs no URL escaping.
+  # sslmode=require: Postgres traffic is encrypted. CNPG's server
+  # certificate is not verified (its CA lives in data); verify-full would
+  # need that CA mounted here.
+  url: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)?sslmode=require
+
+# No separate migrations Job: the proxy applies Prisma migrations itself at
+# startup (DISABLE_SCHEMA_UPDATE is not set). The chart's Job is an ArgoCD
+# PreSync hook that runs as the chart's ServiceAccount, which a first sync
+# has not created yet at PreSync time, so it would hang. With one replica
+# there is no race between pods migrating at once.
+migrationJob:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Secrets and settings
+#
+# Master key: PROXY_MASTER_KEY, from the litellm Secret (task secrets). The
+# chart would otherwise generate one and store it in a Secret of its own.
+masterkeySecretName: litellm
+masterkeySecretKey: LITELLM_MASTER_KEY
+# The whole litellm Secret as env vars: LITELLM_MASTER_KEY (read by
+# config.yaml below) and LITELLM_SALT_KEY (encrypts provider credentials
+# that LiteLLM stores in the database; never change it once set).
+environmentSecrets:
+  - litellm
+
+envVars:
+  # Do not load a .env file from the working directory (LiteLLM does that
+  # outside production mode).
+  LITELLM_MODE: PRODUCTION
+  # Use the model price list bundled in the image instead of downloading
+  # it from GitHub at startup: llm has no internet egress (a3-2 adds HTTPS
+  # for Bedrock only), and a fetched price list is one more thing that can
+  # change under us.
+  LITELLM_LOCAL_MODEL_COST_MAP: "True"
+  # MCP gateway: off as far as LiteLLM 1.106.6 open source allows. Its /mcp
+  # routes cannot be unmounted (the global allowed_routes setting is
+  # Enterprise-only), so: no MCP servers are configured (config.yaml),
+  # stdio servers (which run commands in this pod) stay disabled, models
+  # and MCP servers cannot be added through the API (store_model_in_db),
+  # and the agent's key may only call the chat and models routes
+  # (task llm:key sets allowed_routes). README.md "AI gateway".
+  LITELLM_ENABLE_MCP_STDIO: "false"
+  # No Swagger and ReDoc pages at / and /redoc. The admin UI at /ui stays.
+  NO_DOCS: "True"
+  NO_REDOC: "True"
+
+# ---------------------------------------------------------------------------
+# config.yaml: the chart renders this block into the ConfigMap litellm-config
+# and mounts it at /etc/litellm/config.yaml. A change here changes the pod
+# template's checksum/config annotation, so the pod restarts with it.
+proxy_config:
+  # Deployments. Mock models only (a3-1): mock_response makes LiteLLM answer
+  # with the fixed text instead of calling a provider, so no keys and no
+  # egress are needed. a3-2 adds Bedrock, a3-3 Ollama.
+  model_list:
+    - model_name: agent-model-primary
+      litellm_params:
+        # Any provider prefix works with mock_response; nothing is called.
+        model: openai/agent-model-primary
+        mock_response: "MOCK PRIMARY: agent-model-primary answered."
+        # Made-up prices (USD per token), so spend tracking and the key's
+        # budget have something to count. Real models get real prices.
+        input_cost_per_token: 0.000001
+        output_cost_per_token: 0.000002
+    - model_name: agent-model-backup
+      litellm_params:
+        model: openai/agent-model-backup
+        mock_response: "MOCK BACKUP: agent-model-backup answered."
+        input_cost_per_token: 0.000001
+        output_cost_per_token: 0.000002
+
+  router_settings:
+    # The logical name clients use. agent-model is an alias for the model
+    # group agent-model-primary; switching providers later means changing
+    # this line (or the deployment behind it), never the agent.
+    model_group_alias:
+      agent-model: agent-model-primary
+    # Retry a failed call twice on the same group before falling back.
+    num_retries: 2
+    # Seconds a single provider call may take before it counts as failed.
+    timeout: 60
+    # When agent-model-primary still fails after its retries, try
+    # agent-model-backup. Keyed by the group the alias resolves to.
+    fallbacks:
+      - agent-model-primary: [agent-model-backup]
+
+  litellm_settings:
+    # Keep prompt and response text out of logging callbacks (none yet;
+    # Langfuse arrives in a6-2 and must opt in on purpose).
+    turn_off_message_logging: true
+
+  general_settings:
+    master_key: os.environ/LITELLM_MASTER_KEY
+    # Read from the env var the chart builds; stated so the config is
+    # explicit about where keys and spend live.
+    database_url: os.environ/DATABASE_URL
+    # Models come from this file only, not from the admin API or UI.
+    store_model_in_db: false
+    # Spend logs: one row per request in Postgres (key, model, tokens,
+    # cost), which task llm:spend and the UI read...
+    disable_spend_logs: false
+    # ...without the prompt or the response.
+    store_prompts_in_spend_logs: false

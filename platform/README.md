@@ -11,6 +11,7 @@ platform/
   apps/                          Helm chart: one template per child Application
   <app>/values.yaml              values a child reads from this repo, e.g. demo/
   <app>/manifests/               plain manifests a child deploys next to its chart, e.g. seaweedfs/
+  litellm/values.yaml            the AI gateway: chart values and config.yaml, see README.md "AI gateway"
   postgres/                      a chart of our own (Cluster jobs and its backups), see README.md "Database"
   security/                      a chart of our own (namespaces, Pod Security, NetworkPolicies), see README.md "Cluster security"
 ```

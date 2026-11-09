@@ -40,6 +40,20 @@ spec:
           port: 8000
         - protocol: TCP
           port: 5432
+    # Postgres clients in other namespaces. Each also has an egress rule to
+    # these pods on 5432 in its own namespace, which denies egress too.
+    - from:
+        # LiteLLM in llm (a3-1), database litellm. namespaceSelector and
+        # podSelector in one item: both must match.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: llm
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.llm.gatewayPodLabels | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 5432
   egress:
     # The instance manager watches its Cluster, and the plugin sidecar
     # reads the ObjectStore and the s3 Secret, through the API server.
@@ -164,29 +178,15 @@ spec:
 {{- end }}
 
 # ---------------------------------------------------------------------------
-# Clients of Postgres: none yet. When LiteLLM (a3, namespace llm) and the
-# agent (a4, namespace agents) arrive, they get in like this: add the
-# ingress rule below to pg-instances, and an egress rule to the jobs pods
-# on 5432 in the client's own namespace (networkpolicies-llm.yaml,
-# networkpolicies-agents.yaml), since that namespace denies egress too.
+# More Postgres clients: when the agent (a4, namespace agents) arrives, add
+# it next to LiteLLM in the pg-instances ingress rule above, as another item
+# under from:, and an egress rule to the jobs pods on 5432 in
+# networkpolicies-agents.yaml (see the litellm policy in
+# networkpolicies-llm.yaml for the shape).
 #
-#   ingress:
-#     - from:
-#         # The agent's pods in agents. namespaceSelector and podSelector
-#         # in one item: both must match.
 #         - namespaceSelector:
 #             matchLabels:
 #               kubernetes.io/metadata.name: agents
 #           podSelector:
 #             matchLabels:
 #               app.kubernetes.io/name: agent
-#         # LiteLLM's pods in llm.
-#         - namespaceSelector:
-#             matchLabels:
-#               kubernetes.io/metadata.name: llm
-#           podSelector:
-#             matchLabels:
-#               app.kubernetes.io/name: litellm
-#       ports:
-#         - protocol: TCP
-#           port: 5432

@@ -74,6 +74,25 @@ vars:
   SEC_TEST_NAMESPACE: data
   # A small shell image with nc and nslookup, for task sec:test.
   BUSYBOX_IMAGE: busybox:1.37.0@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
+  # The LLM gateway (a3-1): LiteLLM from platform/litellm, Service litellm
+  # in namespace llm. task llm:verify-image reads the pinned image from the
+  # values file and the chart version from the Application.
+  LLM_NAMESPACE: llm
+  LLM_SERVICE: litellm
+  LLM_PORT: "4000"
+  LLM_VALUES: platform/litellm/values.yaml
+  LLM_APP: platform/apps/templates/litellm.yaml
+  LLM_CHART: ghcr.io/berriai/litellm-helm
+  # LiteLLM's cosign public key, fetched from a fixed commit (a commit hash
+  # cannot be moved, unlike a branch or tag), and its SHA-256 as published
+  # in LiteLLM's incident post of 2026-10-21 (updated 2026-10-30). The key
+  # was rotated on 2026-10-23 in commit e82a3c6 because the old one was
+  # exposed; it signs v1.103.8, v1.104.6, v1.105.4, v1.106.3 and later.
+  LITELLM_COSIGN_KEY_URL: https://raw.githubusercontent.com/BerriAI/litellm/e82a3c646908ba0a6ee0beddc4310d7a6cac4065/cosign.pub
+  LITELLM_COSIGN_FINGERPRINT: e3fe3e08c44b16407fe0b37c43b4f8b603b3a0f4ee74c29e647bc022d762c2c0
+  # For task llm:smoke: curl as a non-root image (UID 100 by default; the
+  # pod runs it as 65534). 8.23.0 is from 2026-10-28.
+  CURL_IMAGE: curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93
   BRANCH:
     sh: git rev-parse --abbrev-ref HEAD
   # Image tag: short commit, plus "-dirty" when there are uncommitted
@@ -1159,6 +1178,238 @@ tasks:
         --env-file "$HOME/.config/sizjobs/.env"
         --map config/secrets-map.yaml
         --context {{.KCTX}}
+
+  # The LLM gateway (a3-1): LiteLLM in namespace llm, from platform/litellm.
+  # README.md "AI gateway" explains models, keys and budgets. The tasks that
+  # need the master key (llm:key, llm:spend, the DB query in llm:health)
+  # read it from the .env themselves (scripts/litellm_admin.py); it never
+  # passes through Task, arguments or output.
+
+  llm:verify-image:
+    desc: Verify the cosign signatures of the pinned LiteLLM image (by digest) and Helm chart against LiteLLM's key at a fixed commit
+    cmds:
+      - |
+        # Image and chart exactly as git pins them. VALUE_AWK prints `key`
+        # from the top-level `block` of a values file.
+        block=image key=repository; repo=$({{.PG_VALUE_AWK}} {{.LLM_VALUES}})
+        block=image key=tag; tag=$({{.PG_VALUE_AWK}} {{.LLM_VALUES}})
+        version=${tag%%@*}
+        digest=${tag#*@}
+        # targetRevision on the line after "chart: litellm-helm".
+        chart_version=$(awk '/chart: litellm-helm/ {f=1; next} f && $1 == "targetRevision:" {print $2; exit}' {{.LLM_APP}})
+        echo "==> Pinned in git: image $repo $version, digest $digest; chart {{.LLM_CHART}} $chart_version"
+        case "$digest" in
+          sha256:*) ;;
+          *) echo "==> FAIL: image.tag in {{.LLM_VALUES}} has no @sha256 digest. Pin by digest."; exit 1 ;;
+        esac
+        # The compromised release (2026-10-21). Its images carry a valid
+        # signature from the old key, so a signature check alone would not
+        # catch it.
+        if [ "$version" = v1.107.0 ] || [ "$chart_version" = 1.107.0 ]; then
+          echo "==> FAIL: 1.107.0 is the compromised LiteLLM release. Never use it."
+          exit 1
+        fi
+
+        echo "==> Fetching LiteLLM's public key from commit e82a3c6 and checking its fingerprint"
+        keyfile=$(mktemp)
+        trap 'rm -f "$keyfile"' EXIT
+        curl -fsSL -o "$keyfile" {{.LITELLM_COSIGN_KEY_URL}}
+        fingerprint=$(sha256sum "$keyfile" | cut -d' ' -f1)
+        if [ "$fingerprint" != {{.LITELLM_COSIGN_FINGERPRINT}} ]; then
+          echo "==> FAIL: key fingerprint $fingerprint, expected {{.LITELLM_COSIGN_FINGERPRINT}}"
+          exit 1
+        fi
+        echo "    PASS  fingerprint $fingerprint matches the incident post"
+
+        # cosign verify checks that a signature made with this key exists
+        # for exactly this digest, and that it is recorded in the Rekor
+        # transparency log. Its JSON output (the signed payload) goes to
+        # /dev/null; the checks it performed go to stderr.
+        echo "==> Verifying the image signature: $repo@$digest"
+        cosign verify --key "$keyfile" "$repo@$digest" >/dev/null 2>"$keyfile.log" \
+          && echo "    PASS  image signature" || { cat "$keyfile.log"; rm -f "$keyfile.log"; echo "==> FAIL: image signature"; exit 1; }
+        sed -n 's/^  - /          /p' "$keyfile.log"; rm -f "$keyfile.log"
+
+        echo "==> Verifying the chart signature: {{.LLM_CHART}}:$chart_version"
+        cosign verify --key "$keyfile" "{{.LLM_CHART}}:$chart_version" >/dev/null 2>"$keyfile.log" \
+          && echo "    PASS  chart signature" || { cat "$keyfile.log"; rm -f "$keyfile.log"; echo "==> FAIL: chart signature"; exit 1; }
+        rm -f "$keyfile.log"
+
+        # Informational: does the tag still point at our digest? A moved
+        # tag does not affect us (we pull by digest), but it is worth knowing
+        # before an upgrade.
+        echo "==> Checking where tag $version points today"
+        now=$(docker buildx imagetools inspect "$repo:$version" --format '{{"{{"}}json .Manifest.Digest{{"}}"}}' 2>/dev/null | tr -d '"' || true)
+        if [ "$now" = "$digest" ]; then
+          echo "    ok    $repo:$version still points at the pinned digest"
+        else
+          echo "    WARN  $repo:$version now points at ${now:-(could not resolve)}, not the pinned digest. Find out why before any upgrade."
+        fi
+        echo "==> Verified: image and chart are signed with LiteLLM's current key."
+
+  llm:forward:
+    desc: Port-forward the LiteLLM gateway to http://localhost:4000 (admin UI at /ui; Ctrl+C to stop)
+    cmds:
+      - echo "==> LiteLLM at http://localhost:{{.LLM_PORT}} (svc/{{.LLM_SERVICE}} in namespace {{.LLM_NAMESPACE}}). Ctrl+C stops the port-forward."
+      - echo "    Admin UI  http://localhost:{{.LLM_PORT}}/ui  (user admin, password LITELLM_MASTER_KEY from your .env)"
+      # port-forward listens on 127.0.0.1 only, so nothing else on the
+      # network reaches the gateway. It needs no NetworkPolicy: it enters
+      # the pod's network namespace through the kubelet.
+      - kubectl --context {{.KCTX}} -n {{.LLM_NAMESPACE}} port-forward svc/{{.LLM_SERVICE}} {{.LLM_PORT}}:4000
+
+  llm:health:
+    desc: "Gateway health: pods, liveness, readiness and database connectivity (PASS/FAIL)"
+    cmds:
+      - echo "==> Checking LiteLLM health (scripts/litellm_admin.py health)"
+      - >-
+        uv run --quiet --script scripts/litellm_admin.py health
+        --context {{.KCTX}} --namespace {{.LLM_NAMESPACE}} --service {{.LLM_SERVICE}}
+        --env-file "$HOME/.config/sizjobs/.env"
+
+  llm:key:
+    desc: "Create the agent's virtual key (agent-model only, 10 USD per 30 days) and write it to the .env as LITELLM_AGENT_KEY (ROTATE=1 replaces it)"
+    preconditions:
+      - sh: test -f "$HOME/.config/sizjobs/.env"
+        msg: "~/.config/sizjobs/.env not found. See .env.example."
+    env:
+      ROTATE: "{{.ROTATE}}"
+    cmds:
+      - echo "==> {{if eq .ROTATE "1"}}Rotating{{else}}Creating{{end}} the agent's LiteLLM key through the admin API (scripts/litellm_admin.py key)"
+      - >-
+        uv run --quiet --script scripts/litellm_admin.py key
+        --context {{.KCTX}} --namespace {{.LLM_NAMESPACE}} --service {{.LLM_SERVICE}}
+        --env-file "$HOME/.config/sizjobs/.env"
+      - echo "==> Next, push it to Secret agents/llm-key with task secrets."
+
+  llm:spend:
+    desc: Show the agent key's spend and budget, and its requests per model
+    cmds:
+      - echo "==> Reading the agent key's spend from LiteLLM (scripts/litellm_admin.py spend)"
+      - >-
+        uv run --quiet --script scripts/litellm_admin.py spend
+        --context {{.KCTX}} --namespace {{.LLM_NAMESPACE}} --service {{.LLM_SERVICE}}
+        --env-file "$HOME/.config/sizjobs/.env"
+
+  llm:smoke:
+    desc: "Gateway smoke test from a pod in agents with the agent key: primary, fallback, no key, wrong model, MCP (PASS/FAIL)"
+    preconditions:
+      - sh: kubectl --context {{.KCTX}} -n agents get secret llm-key >/dev/null 2>&1
+        msg: "Secret agents/llm-key not found. Run task llm:key, then task secrets."
+    cmds:
+      - |
+        k() { kubectl --context {{.KCTX}} -n agents "$@"; }
+        pod="llm-smoke-$(date +%s)"
+        echo "==> Starting pod $pod in namespace agents, with LITELLM_AGENT_KEY from Secret llm-key"
+        echo "    Its label app.kubernetes.io/name=llm-smoke is one of the two the NetworkPolicies let reach"
+        echo "    LiteLLM (llm-clients in agents, litellm in llm): it calls the gateway as the agent will."
+        trap 'echo "==> Deleting pod $pod"; k delete pod "$pod" --ignore-not-found --wait=false >/dev/null 2>&1' EXIT
+        # Quoted 'EOF': $vars below belong to the pod's shell; sed fills in
+        # the pod name. The key reaches curl through stdin (curl -K -, a
+        # config file on stdin), never as an argument, and is never printed.
+        sed "s/POD_NAME/$pod/" <<'EOF' | k create -f - >/dev/null
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: POD_NAME
+          labels:
+            app.kubernetes.io/name: llm-smoke
+            app.kubernetes.io/managed-by: sizjobs-task-llm-smoke
+        spec:
+          restartPolicy: Never
+          activeDeadlineSeconds: 120
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: smoke
+              image: {{.CURL_IMAGE}}
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  url=http://{{.LLM_SERVICE}}.{{.LLM_NAMESPACE}}.svc.cluster.local:{{.LLM_PORT}}
+                  result=PASS
+                  report() { printf '    %-4s  %s\n' "$1" "$2"; [ "$1" = PASS ] || result=FAIL; }
+                  # post PATH BODY [nokey]: prints the HTTP status, body in /tmp/body.
+                  post() {
+                    if [ "$3" = nokey ]; then
+                      curl -s -m 30 -o /tmp/body -w '%{http_code}' -H 'Content-Type: application/json' -d "$2" "$url$1"
+                    else
+                      printf 'header = "Authorization: Bearer %s"\n' "$LITELLM_AGENT_KEY" \
+                        | curl -s -m 30 -K - -o /tmp/body -w '%{http_code}' -H 'Content-Type: application/json' -d "$2" "$url$1"
+                    fi
+                  }
+                  ask() { printf '{"model":"%s","messages":[{"role":"user","content":"ping"}]%s}' "$1" "$2"; }
+                  # LiteLLM's answer text is not secret, but cut it short; an
+                  # error body could echo part of a key, so mask sk-... too.
+                  short() { tr -d '\n' < /tmp/body | sed 's/sk-[A-Za-z0-9_-]*/sk-***/g' | cut -c1-160; }
+
+                  echo "==> (a) agent-model, expect the primary's mock text"
+                  code=$(post /v1/chat/completions "$(ask agent-model)")
+                  if [ "$code" = 200 ] && grep -q 'MOCK PRIMARY' /tmp/body; then report PASS "HTTP 200, MOCK PRIMARY"; else report FAIL "HTTP $code: $(short)"; fi
+
+                  echo "==> (b) agent-model with mock_testing_fallbacks, expect the backup's mock text"
+                  # mock_testing_fallbacks makes the router fail the primary
+                  # (after its retries), so the fallback answers.
+                  code=$(post /v1/chat/completions "$(ask agent-model ',"mock_testing_fallbacks":true')")
+                  if [ "$code" = 200 ] && grep -q 'MOCK BACKUP' /tmp/body; then report PASS "HTTP 200, MOCK BACKUP"; else report FAIL "HTTP $code: $(short)"; fi
+
+                  echo "==> (c) agent-model without a key, expect 401"
+                  code=$(post /v1/chat/completions "$(ask agent-model)" nokey)
+                  if [ "$code" = 401 ]; then report PASS "HTTP 401"; else report FAIL "HTTP $code: $(short)"; fi
+
+                  echo "==> (d) agent-model-primary directly, a model the key is not allowed, expect a rejection"
+                  code=$(post /v1/chat/completions "$(ask agent-model-primary)")
+                  case "$code" in
+                    401|403) report PASS "HTTP $code: $(short)" ;;
+                    *) report FAIL "HTTP $code: $(short)" ;;
+                  esac
+
+                  echo "==> (e) the MCP gateway (POST /mcp/) with the agent key, expect a rejection"
+                  code=$(post /mcp/ '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+                  case "$code" in
+                    401|403|404) report PASS "HTTP $code" ;;
+                    *) report FAIL "HTTP $code: $(short)" ;;
+                  esac
+
+                  echo "==> LLM smoke test: $result"
+                  [ "$result" = PASS ]
+              env:
+                - name: LITELLM_AGENT_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: llm-key
+                      key: LITELLM_AGENT_KEY
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  memory: 64Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir:
+                sizeLimit: 1Mi
+        EOF
+        echo "==> Waiting for the checks to finish"
+        for i in $(seq 1 60); do
+          phase=$(k get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+          case "$phase" in Succeeded|Failed) break ;; esac
+          sleep 2
+        done
+        k logs "$pod"
+        [ "$phase" = Succeeded ] || { echo "==> llm:smoke: FAIL (pod phase ${phase:-unknown})"; exit 1; }
 
   # Local model (a1-9): Ollama on the WSL host, for offline smoke tests.
   # It is a systemd service installed by Ollama's script, so starting and

@@ -64,6 +64,11 @@ tflint = "0.64.0"
 # in 2026, so wait about two weeks before taking a fresh release.
 trivy = "0.75.0"
 
+# Verifies container image signatures (sigstore). task llm:verify-image
+# checks the pinned LiteLLM image against the public key at a fixed commit
+# of the LiteLLM repo (a3-1). Our own images will be signed with it in CI.
+cosign = "3.1.4"
+
 # Secret scanner. The pre-commit hook scans staged changes; CI also runs
 # `gitleaks git` over the full history.
 gitleaks = "8.30.1"
