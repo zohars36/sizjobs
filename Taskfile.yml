@@ -1333,19 +1333,51 @@ tasks:
                   url=http://{{.LLM_SERVICE}}.{{.LLM_NAMESPACE}}.svc.cluster.local:{{.LLM_PORT}}
                   result=PASS
                   report() { printf '    %-4s  %s\n' "$1" "$2"; [ "$1" = PASS ] || result=FAIL; }
-                  # post PATH BODY [nokey]: prints the HTTP status, body in /tmp/body.
+                  # post PATH BODY [nokey]: prints the HTTP status. The body
+                  # goes to /tmp/body, curl's own error (-sS: silent, but
+                  # still show errors) to /tmp/err, its exit code to
+                  # /tmp/rc. Without a response (HTTP 000) curl writes no
+                  # body file, so clear all three first.
                   post() {
+                    : > /tmp/body; : > /tmp/err
                     if [ "$3" = nokey ]; then
-                      curl -s -m 30 -o /tmp/body -w '%{http_code}' -H 'Content-Type: application/json' -d "$2" "$url$1"
+                      curl -sS -m 30 -o /tmp/body -w '%{http_code}' -H 'Content-Type: application/json' -d "$2" "$url$1" 2>/tmp/err
                     else
                       printf 'header = "Authorization: Bearer %s"\n' "$LITELLM_AGENT_KEY" \
-                        | curl -s -m 30 -K - -o /tmp/body -w '%{http_code}' -H 'Content-Type: application/json' -d "$2" "$url$1"
+                        | curl -sS -m 30 -K - -o /tmp/body -w '%{http_code}' -H 'Content-Type: application/json' -d "$2" "$url$1" 2>/tmp/err
                     fi
+                    echo $? > /tmp/rc
                   }
                   ask() { printf '{"model":"%s","messages":[{"role":"user","content":"ping"}]%s}' "$1" "$2"; }
-                  # LiteLLM's answer text is not secret, but cut it short; an
-                  # error body could echo part of a key, so mask sk-... too.
-                  short() { tr -d '\n' < /tmp/body | sed 's/sk-[A-Za-z0-9_-]*/sk-***/g' | cut -c1-160; }
+                  # What went wrong, for a FAIL line: curl's exit code and
+                  # error when it got no answer, otherwise the start of
+                  # LiteLLM's answer. Not secret, but an error body could
+                  # echo part of a key, so mask sk-... too.
+                  short() {
+                    rc=$(cat /tmp/rc)
+                    if [ "$rc" != 0 ]; then
+                      echo "curl exit $rc: $(tr -d '\n' < /tmp/err)"
+                    else
+                      tr -d '\n' < /tmp/body | sed 's/sk-[A-Za-z0-9_-]*/sk-***/g' | cut -c1-160
+                    fi
+                  }
+
+                  # A new pod's traffic is dropped for its first second or
+                  # so: kube-router (k3s's NetworkPolicy engine) has to add
+                  # the pod's IP to the allow rules for its labels first, and
+                  # until then default-deny wins (curl exit 7, HTTP 000).
+                  # Wait for the gateway to answer before any check counts.
+                  echo "==> Waiting until the NetworkPolicies let this pod reach $url (up to 30s)"
+                  for i in $(seq 1 30); do
+                    code=$(curl -sS -m 3 -o /dev/null -w '%{http_code}' "$url/health/liveliness" 2>/tmp/err) && break
+                    sleep 1
+                  done
+                  if [ "$code" != 200 ]; then
+                    echo "    FAIL  gateway not reachable after 30s: HTTP $code, $(tr -d '\n' < /tmp/err)"
+                    echo "==> LLM smoke test: FAIL"
+                    exit 1
+                  fi
+                  echo "    ok    /health/liveliness answers 200 after ${i}s"
 
                   echo "==> (a) agent-model, expect the primary's mock text"
                   code=$(post /v1/chat/completions "$(ask agent-model)")

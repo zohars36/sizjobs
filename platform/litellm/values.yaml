@@ -212,3 +212,11 @@ proxy_config:
     disable_spend_logs: false
     # ...without the prompt or the response.
     store_prompts_in_spend_logs: false
+    # Lets a request carry LiteLLM's test switches (mock_testing_fallbacks,
+    # mock_timeout, mock_delay, ...), which task llm:smoke check (b) uses to
+    # force the fallback. Proxy-wide, for every key; only settable here, not
+    # through the API or UI. Harmless while every model is a mock, but with
+    # real providers any caller could force fallbacks or delays: a3-2 sets
+    # this to false and gives llm:smoke (b) another way to trigger the
+    # fallback.
+    dangerously_allow_mock_testing_request_params: true

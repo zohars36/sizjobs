@@ -520,6 +520,7 @@ valid.
   and the agent key's `allowed_routes` excludes every MCP route
   (`task llm:smoke` check e). Only the master key could reach them, and
   only through a port-forward.
+- **Test switches, still on.** `dangerously_allow_mock_testing_request_params: true` lets any key send `mock_testing_fallbacks` (used by `task llm:smoke` check b). Harmless with mock models only; a3-2 turns it off before real providers arrive.
 - **Swagger and ReDoc pages** (`NO_DOCS`, `NO_REDOC`). The admin UI at
   `/ui` stays, reachable only through `task llm:forward`: the Service is
   ClusterIP and the NetworkPolicies let only the agent's pods in
