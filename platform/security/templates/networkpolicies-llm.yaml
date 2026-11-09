@@ -1,6 +1,55 @@
 {{- /*
-NetworkPolicies in llm (LiteLLM arrives in a3). Only the baseline for now:
-deny all, plus DNS. a3 adds LiteLLM's own allow rules here (ingress from
-agents, egress to Postgres in data and to the model providers).
+NetworkPolicies in llm: the LiteLLM gateway (a3-1). docs/network-flows.md
+lists the flows. Every flow out of this namespace also needs a rule on the
+other side: Postgres's ingress in networkpolicies-data.yaml, and the
+clients' egress in networkpolicies-agents.yaml.
+
+No internet egress yet: the mock models call nothing. a3-2 adds HTTPS
+egress for Bedrock to the litellm policy below.
 */}}
+{{- $l := .Values.llm }}
+{{- $d := .Values.data }}
 {{- include "security.baseline" (dict "ns" "llm" "root" .) }}
+---
+# LiteLLM: called by the agent's pods, calls Postgres.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: litellm
+  namespace: llm
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $l.gatewayPodLabels | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # The only way in besides kubectl port-forward (task llm:forward),
+    # which enters the pod's network namespace directly and needs no rule.
+    - from:
+        # One item with both selectors: pods in agents AND with one of
+        # these names.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $l.clientNamespace }}
+          podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: {{ toJson $l.clientNames }}
+      ports:
+        - protocol: TCP
+          port: {{ $l.port }}
+  egress:
+    # Keys, budgets and spend logs live in the litellm database. Only the
+    # jobs instance pods (jobs-rw points at the primary among them).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: data
+          podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ $d.pgCluster }}
+              cnpg.io/podRole: instance
+      ports:
+        - protocol: TCP
+          port: 5432

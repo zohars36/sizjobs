@@ -43,26 +43,43 @@ From the running cluster (a2-5, k3s v1.36.5, CNPG 1.30.1, SeaweedFS
 
 | Traffic | Why no rule |
 |---|---|
-| kubelet health probes (node → pods, e.g. SeaweedFS :9333, jobs :8000) | kube-router, k3s's policy engine, always accepts traffic that starts on the pod's own node. |
-| `kubectl exec`, `logs`, `port-forward` (`task pg:psql`, `task s3:forward`) | Go through the API server and kubelet into the pod; port-forward connects inside the pod's own network namespace. |
+| kubelet health probes (node → pods, e.g. SeaweedFS :9333, jobs :8000, LiteLLM :4000) | kube-router, k3s's policy engine, always accepts traffic that starts on the pod's own node. |
+| `kubectl exec`, `logs`, `port-forward` (`task pg:psql`, `task s3:forward`, `task llm:forward`) | Go through the API server and kubelet into the pod; port-forward connects inside the pod's own network namespace. |
 | CNPG operator → Barman Cloud Plugin (`cnpg-system`, TCP 9090) | Both in `cnpg-system`, a platform namespace without policies. |
 | Instance ↔ instance replication (5432) | One instance (`instances: 1`). Add it with the replicas. |
 | Postgres metrics (9187) | Nothing scrapes them yet. Monitoring adds its own row. |
 
-## Namespaces llm and agents
+## Namespace llm
 
-Only rows 1 (`allow-dns`) and the default-deny. Each workload task adds
-its rows here and its rules in `networkpolicies-<namespace>.yaml`:
+Added by a3-1 (LiteLLM 1.106.6). Flows from LiteLLM's configuration and
+the chart's pod spec (one container, port 4000, no sidecars), and checked
+with `task llm:health` (database) and `task llm:smoke` (clients).
 
-| Task | Expected flows |
-|---|---|
-| a3 (LiteLLM in `llm`) | agents → LiteLLM; LiteLLM → jobs:5432; LiteLLM → model providers (HTTPS) |
-| a4 (agent in `agents`) | agent → LiteLLM; agent → jobs:5432 |
+| # | From | To | Port | Policy (both sides) | Seen how |
+|---|---|---|---|---|---|
+| 11 | every pod in `llm` | CoreDNS | UDP+TCP 53 | `allow-dns` (llm) | LiteLLM resolves `jobs-rw.data.svc.cluster.local` |
+| 12 | LiteLLM (`llm`, `app.kubernetes.io/name=litellm`) | jobs instance pods (`data`, `cnpg.io/cluster=jobs`, `cnpg.io/podRole=instance`) | TCP 5432 | `litellm` egress (llm), `pg-instances` ingress (data) | `DATABASE_URL` → `jobs-rw:5432` (keys, budgets, spend logs); `task llm:health` db `connected` |
+| 13 | agent pods (`agents`, `app.kubernetes.io/name` in `agent`, `llm-smoke`) | LiteLLM (`llm`, `app.kubernetes.io/name=litellm`) | TCP 4000 | `llm-clients` egress (agents), `litellm` ingress (llm) | `task llm:smoke`: its pod calls `litellm.llm.svc:4000` |
+
+Row 13 is the only way into the gateway besides `kubectl port-forward`
+(`task llm:forward`, and the temporary forwards of `llm:health`, `llm:key`
+and `llm:spend`), which needs no rule ("Not in the table", above). `agent` is the agent
+of a4; `llm-smoke` is the short-lived pod of `task llm:smoke`.
+
+No internet egress from `llm`: the mock models call nothing, and
+`LITELLM_LOCAL_MODEL_COST_MAP` keeps LiteLLM from downloading its price
+list from GitHub at startup. a3-2 adds HTTPS egress for Bedrock.
+
+## Namespace agents
+
+The default-deny, `allow-dns`, and the egress half of row 13
+(`llm-clients`). a4 adds the agent's own rules: agent → jobs:5432 (an
+ingress item on `pg-instances` next to LiteLLM's, and egress in `agents`;
+`networkpolicies-data.yaml` ends with the snippet).
 
 Postgres clients from another namespace need two rules, because both
-namespaces deny by default: ingress on `pg-instances` in `data` (the
-commented example in `networkpolicies-data.yaml`) and egress to `data` on
-5432 in their own namespace.
+namespaces deny by default: ingress on `pg-instances` in `data` and
+egress to `data` on 5432 in their own namespace, as row 12 shows.
 
 ## Part B (AWS)
 

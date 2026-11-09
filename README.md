@@ -437,6 +437,137 @@ blocked connection really is the policy and not a service that is down.
 Docker picks the k3d network's subnet when the cluster is created, so a
 re-created cluster can land on another one.
 
+## AI gateway
+
+Every model call in the cluster goes through
+[LiteLLM](https://docs.litellm.ai/) in namespace `llm` (ArgoCD app
+`litellm`, sync wave 2; chart values and `config.yaml` in
+[platform/litellm/values.yaml](platform/litellm/values.yaml)). Why this
+shape: [ADR 0009](docs/adr/0009-litellm-gateway.md).
+
+### What it does
+
+- **One endpoint, logical names.** Clients call the OpenAI-compatible API
+  at `http://litellm.llm.svc.cluster.local:4000/v1` and ask for a logical
+  model name. LiteLLM maps it to a real deployment, so switching provider
+  is a change to `config.yaml`, never to the agent.
+- **Retries and fallback.** A failed call is retried twice
+  (`num_retries: 2`, 60 s `timeout` per call), then sent to the fallback.
+- **Keys and budgets.** Every client has its own virtual key, limited to
+  certain models and a budget. LiteLLM stores keys (hashed), budgets and
+  one spend-log row per request (key, model, tokens, cost, but no prompt or
+  response text) in the `litellm` database of the `jobs` Postgres cluster.
+- **The only holder of provider credentials** (from a3-2). Apps never see
+  them, nor the master key.
+
+### Logical model names
+
+| Name | What answers today | Who may call it |
+|---|---|---|
+| `agent-model` | alias of `agent-model-primary`, falling back to `agent-model-backup` | the agent's key |
+| `agent-model-primary` | mock: `MOCK PRIMARY: agent-model-primary answered.` | master key only |
+| `agent-model-backup` | mock: `MOCK BACKUP: agent-model-backup answered.` | master key only |
+
+The mocks use LiteLLM's `mock_response`: no provider is called, and
+made-up prices make the spend tracking count something. a3-2 puts Bedrock
+behind `agent-model`; a3-3 adds `local-small` (Ollama).
+
+### Keys and budgets
+
+| Key | Where | Can |
+|---|---|---|
+| Master key `LITELLM_MASTER_KEY` | `.env` → Secret `llm/litellm` | everything: admin API, admin UI. Only LiteLLM and the `llm:*` tasks use it |
+| Salt key `LITELLM_SALT_KEY` | `.env` → Secret `llm/litellm` | encrypts credentials LiteLLM stores in its DB. Never change it once set |
+| Agent key `LITELLM_AGENT_KEY` | `.env` → Secret `agents/llm-key` | model `agent-model` only; routes `/v1/chat/completions` and `/v1/models` only; 10 USD per 30 days |
+
+`task llm:key` creates the agent key through the admin API and writes it
+straight into the `.env` (it prints only `LITELLM_AGENT_KEY written`);
+`task secrets` then copies it into the cluster. When the key's spend
+reaches `max_budget`, LiteLLM rejects its calls until the budget resets,
+once per `budget_duration` (30d). LiteLLM picks the reset date itself (a key
+created on 2026-11-09 resets on 2026-12-01); `task llm:spend` shows it.
+
+```bash
+task llm:key        # once: create the agent key (refuses if one exists)
+task secrets        # push it to Secret agents/llm-key
+task llm:smoke      # PASS/FAIL: primary, fallback, no key, wrong model, MCP
+task llm:spend      # the agent key's spend, budget and requests per model
+task llm:health     # pods, liveness, readiness, database
+task llm:forward    # http://localhost:4000/ui, the admin UI (user admin,
+                    # password: the master key)
+```
+
+**Rotating the agent key** (monthly, or at once if it may have leaked):
+
+```bash
+task llm:key ROTATE=1   # revoke the old key in LiteLLM, create a new one, write it to the .env
+task secrets            # update Secret agents/llm-key
+# Restart whatever uses it (the agent, from a4), so it reads the new value.
+```
+
+The old key stops working the moment it is revoked, so expect the agent's
+calls to fail until `task secrets` and its restart are done. Rotating the
+master key means changing it in the `.env`, `task secrets`, and
+`kubectl -n llm rollout restart deployment litellm`; virtual keys stay
+valid.
+
+### What is switched off
+
+- **MCP gateway.** LiteLLM 1.106.6 open source cannot unmount its `/mcp`
+  routes (the global `allowed_routes` setting is Enterprise-only). So:
+  no MCP servers in `config.yaml`; stdio MCP servers (which run commands
+  in the pod) disabled with `LITELLM_ENABLE_MCP_STDIO=false`; models and
+  servers cannot be added through the API (`store_model_in_db: false`);
+  and the agent key's `allowed_routes` excludes every MCP route
+  (`task llm:smoke` check e). Only the master key could reach them, and
+  only through a port-forward.
+- **Test switches, still on.** `dangerously_allow_mock_testing_request_params: true` lets any key send `mock_testing_fallbacks` (used by `task llm:smoke` check b). Harmless with mock models only; a3-2 turns it off before real providers arrive.
+- **Swagger and ReDoc pages** (`NO_DOCS`, `NO_REDOC`). The admin UI at
+  `/ui` stays, reachable only through `task llm:forward`: the Service is
+  ClusterIP and the NetworkPolicies let only the agent's pods in
+  ([docs/network-flows.md](docs/network-flows.md) rows 12-13).
+- **Internet egress.** None from `llm` yet; LiteLLM uses the price list
+  in its image (`LITELLM_LOCAL_MODEL_COST_MAP`). a3-2 adds HTTPS for
+  Bedrock.
+- **Bundled extras of the chart**: its Bitnami Postgres, its generated
+  master-key Secret, its migrations Job (the proxy migrates at startup),
+  its helm test pods.
+
+### Upgrading LiteLLM safely
+
+On 2026-10-21 LiteLLM's release pipeline was compromised: `1.107.0` on
+PyPI and Docker, and the floating tags `latest`, `main-latest` and
+`main-stable`, shipped a credential stealer
+([LiteLLM's post](https://docs.litellm.ai/blog/security-incident-oct-21-2026)).
+A valid signature is not proof of safety: the bad images were signed with
+the then-current key. So an upgrade is deliberate:
+
+1. **Read the advisories** first: LiteLLM's
+   [security posts](https://docs.litellm.ai/blog/tags/security) and
+   [GitHub advisories](https://github.com/BerriAI/litellm/security/advisories).
+   Pick an exact `vX.Y.Z` that is about two weeks old, is not named in an
+   incident, and is past every advisory's fixed version. Never `latest`,
+   `main-latest`, `main-stable`, `lts` or any other floating tag.
+2. **Pin by digest.** Look up the multi-arch digest of the non-root image:
+   `docker buildx imagetools inspect ghcr.io/berriai/litellm-non_root:vX.Y.Z`
+   (the top-level `Digest:`). Set `image.tag: vX.Y.Z@sha256:...` in
+   `platform/litellm/values.yaml`, and `targetRevision` of the chart in
+   `platform/apps/templates/litellm.yaml` to the same version. Read the
+   release notes for chart value changes.
+3. **Verify** with `task llm:verify-image`: it checks the key's
+   fingerprint, then the image (by digest) and chart signatures with
+   cosign. If LiteLLM rotates its key again, update
+   `LITELLM_COSIGN_KEY_URL` (a commit, not a branch) and
+   `LITELLM_COSIGN_FINGERPRINT` in `Taskfile.yml` from their announcement.
+4. Commit on a branch, `task dev:up`, then `task llm:health` and
+   `task llm:smoke` before merging.
+
+Why 1.106.6 today: published 2026-10-28 on the 1.106.x line the incident
+post recommends, signed with the key rotated on 2026-10-23, and past
+GHSA-w4c7-34wj-hqm8 (critical master-key leak, fixed in 1.106.5), so
+newer than the post's "pin 1.106.2". The 1.108.x LTS line was days old
+with three patches in three days.
+
 ## Local model
 
 A small model on the laptop, for offline smoke tests only. The laptop has

@@ -66,13 +66,16 @@ applicationSet:
 
 # Reconciles Applications against the cluster. The largest component; its
 # memory grows with the number of resources it watches.
+# 512Mi since a3-1: with nine apps (CNPG and cert-manager CRDs, LiteLLM) it
+# was OOMKilled at 256Mi in the middle of syncs, which left them stuck in
+# "Running". Check `kubectl -n argocd top pod` before lowering it.
 controller:
   resources:
     requests:
       cpu: 50m
-      memory: 128Mi
-    limits:
       memory: 256Mi
+    limits:
+      memory: 512Mi
 
 # Clones the repo and renders Helm charts into manifests. Memory peaks
 # while `helm template` runs.

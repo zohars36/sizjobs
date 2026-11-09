@@ -1,6 +1,33 @@
 {{- /*
-NetworkPolicies in agents (the agent arrives in a4). Only the baseline for
-now: deny all, plus DNS. a4 adds the agent's own allow rules here (egress
-to LiteLLM in llm and to Postgres in data).
+NetworkPolicies in agents (the agent arrives in a4). The baseline (deny
+all, plus DNS), and egress to the LLM gateway for the pods allowed to call
+it. a4 adds the agent's other rules here (egress to Postgres in data).
 */}}
+{{- $l := .Values.llm }}
 {{- include "security.baseline" (dict "ns" "agents" "root" .) }}
+---
+# LLM clients: the agent and the task llm:smoke pod may call LiteLLM in llm.
+# The other side is the ingress rule of the litellm policy in llm.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llm-clients
+  namespace: agents
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: {{ toJson $l.clientNames }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: llm
+          podSelector:
+            matchLabels:
+              {{- toYaml $l.gatewayPodLabels | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $l.port }}

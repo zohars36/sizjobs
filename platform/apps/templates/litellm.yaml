@@ -1,0 +1,68 @@
+# LiteLLM: the AI gateway in namespace llm. Every model call in the cluster
+# goes through it: the agent asks for a logical model name (agent-model),
+# and LiteLLM routes, retries, falls back, checks the caller's virtual key
+# and budget, and records spend in Postgres. README.md "AI gateway".
+#
+# Two sources: LiteLLM's official Helm chart, and this repo for its values
+# ($values), which also hold config.yaml (rendered into a ConfigMap).
+#
+# Needs the litellm and pg-litellm Secrets in llm (task secrets), and the
+# litellm database in the jobs cluster (postgres app, wave 1). Until the
+# Secrets exist the pod waits in CreateContainerConfigError.
+#
+# Supply chain: LiteLLM's release pipeline was compromised on 2026-10-21
+# (v1.107.0 and the latest, main-latest and main-stable tags shipped
+# malware). Chart and image are pinned to exact versions, the image by
+# digest; task llm:verify-image checks both signatures. README.md
+# "AI gateway", "Upgrading LiteLLM" before you change either version.
+#
+# Comments must not contain double curly braces: Helm parses them too.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: litellm
+  namespace: argocd
+  annotations:
+    # Workloads that need Postgres: wave 2, after the postgres app (1).
+    argocd.argoproj.io/sync-wave: "2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    # An OCI registry, not a classic Helm repo: repoURL is the registry
+    # and path without oci://, chart is the last path segment. Public, so
+    # ArgoCD needs no credentials.
+    - repoURL: ghcr.io/berriai
+      chart: litellm-helm
+      # Chart 1.106.6 ships appVersion 1.106.6; the image is pinned
+      # separately by digest in platform/litellm/values.yaml. Bump both
+      # together, only after the checks in README.md "Upgrading LiteLLM".
+      targetRevision: 1.106.6
+      helm:
+        releaseName: litellm
+        # The chart ships helm test pods (busybox, unpinned, root). ArgoCD
+        # already ignores test hooks; say it explicitly so they never
+        # render, whatever ArgoCD's default becomes.
+        skipTests: true
+        valueFiles:
+          - $values/platform/litellm/values.yaml
+    - repoURL: "{{ .Values.repoURL }}"
+      targetRevision: "{{ .Values.revision }}"
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: llm
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m
+    syncOptions:
+      - CreateNamespace=true

@@ -90,3 +90,17 @@ data:
   # CNPG Job pods (label cnpg.io/jobRole) that create the cluster:
   # initdb for a new one, full-recovery for a restore from object storage.
   pgBootstrapJobRoles: [initdb, full-recovery]
+
+# ---------------------------------------------------------------------------
+# The LLM gateway (a3-1): LiteLLM in llm, and who may call it.
+llm:
+  # LiteLLM's pods (labels from its Helm chart, release litellm).
+  gatewayPodLabels:
+    app.kubernetes.io/name: litellm
+  port: 4000
+  # Pods in agents allowed to call the gateway, by app.kubernetes.io/name:
+  #   agent      the agent (a4)
+  #   llm-smoke  the short-lived pod of task llm:smoke
+  # The laptop gets in through task llm:forward, which needs no rule.
+  clientNamespace: agents
+  clientNames: [agent, llm-smoke]
