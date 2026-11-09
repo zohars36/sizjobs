@@ -190,10 +190,14 @@ proxy_config:
     num_retries: 2
     # Seconds a single provider call may take before it counts as failed.
     timeout: 60
-    # When agent-model-primary still fails after its retries, try
-    # agent-model-backup. Keyed by the group the alias resolves to.
+    # When agent-model still fails after its retries, try
+    # agent-model-backup. Keyed by the logical name the client asked for:
+    # the router looks fallbacks up by the requested name (and, once a
+    # deployment was picked, the routed group too). A failure raised before
+    # routing, such as mock_testing_fallbacks, only knows the requested
+    # name, so a key of agent-model-primary would never match it.
     fallbacks:
-      - agent-model-primary: [agent-model-backup]
+      - agent-model: [agent-model-backup]
 
   litellm_settings:
     # Keep prompt and response text out of logging callbacks (none yet;
