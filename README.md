@@ -484,7 +484,8 @@ behind `agent-model`; a3-3 adds `local-small` (Ollama).
 straight into the `.env` (it prints only `LITELLM_AGENT_KEY written`);
 `task secrets` then copies it into the cluster. When the key's spend
 reaches `max_budget`, LiteLLM rejects its calls until the budget resets,
-30 days after the key was created and every 30 days after that.
+once per `budget_duration` (30d). LiteLLM picks the reset date itself (a key
+created on 2026-11-09 resets on 2026-12-01); `task llm:spend` shows it.
 
 ```bash
 task llm:key        # once: create the agent key (refuses if one exists)
