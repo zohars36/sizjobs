@@ -216,7 +216,7 @@ task dev:delete && sudo rm -rf ~/.local/share/sizjobs
 ```
 
 Re-create the cluster after changing `k3d/sizjobs.yaml`: most settings
-(memory cap, registry, volumes) only apply at creation.
+(memory cap, registry, volumes, network subnet) only apply at creation.
 
 ## Database
 
@@ -461,9 +461,11 @@ task sec:test     # from a pod with no allow rule: Postgres, S3 and the
 
 `sec:test` first checks that Postgres and S3 have ready endpoints, so a
 blocked connection really is the policy and not a service that is down.
-`sec:status` also warns when the node's address has left `kubeAPI.cidr`:
-Docker picks the k3d network's subnet when the cluster is created, so a
-re-created cluster can land on another one.
+`sec:status` also warns when the node's address is outside `kubeAPI.cidr`.
+The k3d network's subnet is pinned in `k3d/sizjobs.yaml` to the same
+range ([ADR 0010](docs/adr/0010-pinned-k3d-subnet.md)), so this only
+happens to a cluster created before the pin, or when one of the two
+changed without the other. Change both together and re-create the cluster.
 
 ## AI gateway
 

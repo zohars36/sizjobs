@@ -894,9 +894,10 @@ tasks:
             | sed 's/^/      /' | grep . || echo "      (none)"
         done
 
-        # The API server allow rule is an ipBlock (kubeAPI.cidr). Docker
-        # picks the k3d network's subnet when the cluster is created, so a
-        # re-created cluster can land outside it; then CNPG loses the API.
+        # The API server allow rule is an ipBlock (kubeAPI.cidr). The k3d
+        # network's subnet is pinned to match it (ADR 0010), but a cluster
+        # created before the pin, or after changing only one of the two,
+        # lands outside it; then CNPG loses the API.
         block=kubeAPI key=cidr; cidr=$({{.PG_VALUE_AWK}} {{.SEC_VALUES}})
         node_ip=$(k get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
         echo "==> API server allow rule: kubeAPI.cidr $cidr, node InternalIP $node_ip"
@@ -910,8 +911,8 @@ tasks:
         if [ "$in_cidr" = yes ]; then
           echo "    ok: the node is inside the allowed range"
         else
-          echo "    WARNING: the node is outside $cidr. Set kubeAPI.cidr in {{.SEC_VALUES}} to the k3d network:"
-          echo "    the Subnet in: docker network inspect k3d-{{.CLUSTER}}"
+          echo "    WARNING: the node is outside $cidr. kubeAPI.cidr in {{.SEC_VALUES}} must equal subnet in {{.K3D_CONFIG}};"
+          echo "    fix whichever is wrong, then task dev:delete and task dev:up (the subnet is set at creation)."
         fi
 
   sec:psa:

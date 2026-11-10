@@ -72,7 +72,8 @@ Platform namespaces (`argocd`, `cnpg-system`, `cert-manager`,
 - The API server rule depends on the k3d Docker subnet, which Docker picks
   when the cluster is created. `task sec:status` warns when the node is
   outside `kubeAPI.cidr`. Pinning the subnet in `k3d/sizjobs.yaml` would
-  remove this, at the cost of a cluster re-create.
+  remove this, at the cost of a cluster re-create. (Done in
+  [ADR 0010](0010-pinned-k3d-subnet.md).)
 - Bumping k3s means bumping `podSecurity.version` on purpose, and reading
   what the new version changes in the `restricted` rules.
 - The `CreateNamespace=true` left on other apps is harmless: it only

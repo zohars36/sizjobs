@@ -31,7 +31,7 @@ From the running cluster (a2-5, k3s v1.36.5, CNPG 1.30.1, SeaweedFS
 | 1 | every pod | CoreDNS (`kube-system`, `k8s-app=kube-dns`) | UDP+TCP 53 | `allow-dns` | conntrack: jobs-1 → kube-dns:53 |
 | 2 | CNPG operator (`cnpg-system`, `app.kubernetes.io/name=cloudnative-pg`) | jobs instance pods (`cnpg.io/cluster=jobs`, `cnpg.io/podRole=instance`) | TCP 8000 (status, HTTPS) | `pg-instances` ingress | conntrack: operator → jobs-1:8000 during reconcile |
 | 3 | CNPG operator | jobs instance pods | TCP 5432 | `pg-instances` ingress | not seen in sampling; allowed for the operator's own SQL checks |
-| 4 | jobs instance pods | Kubernetes API (node network, `kubeAPI.cidr`) | TCP 6443, 443 | `pg-instances` egress | conntrack: jobs-1 → `kubernetes:443`, sent to `172.19.0.2:6443` |
+| 4 | jobs instance pods | Kubernetes API (node network, `kubeAPI.cidr`) | TCP 6443, 443 | `pg-instances` egress | conntrack: jobs-1 → `kubernetes:443`, sent to `172.19.0.2:6443` (the node, before ADR 0010 pinned the subnet to 10.100.0.0/24) |
 | 5 | jobs instance pods (Barman Cloud Plugin sidecar) | SeaweedFS (`app.kubernetes.io/name=seaweedfs`) | TCP 8333 (S3) | `pg-instances` egress, `seaweedfs` ingress | conntrack: jobs-1 → seaweedfs:8333 (WAL, base backup) |
 | 6 | CNPG bootstrap Jobs (`cnpg.io/cluster=jobs`, `cnpg.io/jobRole` in `initdb`, `full-recovery`) | Kubernetes API | TCP 6443, 443 | `pg-bootstrap-jobs` egress | restore drill (recovery Job) |
 | 7 | CNPG bootstrap Jobs | SeaweedFS | TCP 8333 | `pg-bootstrap-jobs` egress, `seaweedfs` ingress | restore drill: the recovery Job downloads base backup and WAL |

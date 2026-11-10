@@ -37,6 +37,18 @@ kubeAPI:
   hostIP: "127.0.0.1"
   hostPort: "6550"
 
+# The subnet of the k3d-sizjobs Docker network, fixed instead of picked by
+# Docker. The NetworkPolicy that lets pods reach the API server allows the
+# node's address, from kubeAPI.cidr in platform/security/values.yaml, so the
+# two must match on every machine and after every re-create (ADR 0010).
+# 10.100.0.0/24 lies outside Docker's own pools (172.17-31.x and
+# 192.168.x), so Docker never hands it to another network. It also misses
+# k3s's pod and Service ranges (10.42/16, 10.43/16) and Part B's VPC
+# (10.20/16). A /24 is plenty: the node, the registry and k3d's tools
+# container. Change it together with kubeAPI.cidr, then re-create the
+# cluster: it is only read at creation.
+subnet: "10.100.0.0/24"
+
 volumes:
   # k3s's built-in local-path provisioner stores every PersistentVolume
   # under /var/lib/rancher/k3s/storage in the node. Mounting a host

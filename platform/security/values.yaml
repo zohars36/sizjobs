@@ -43,11 +43,11 @@ namespaces:
 # address after that translation, so pods that talk to the API need an
 # ipBlock for the node network. The only allow rule written as addresses.
 kubeAPI:
-  # Locally: the Docker network of the k3d cluster (docker network inspect
-  # k3d-sizjobs). Docker picks the subnet when the cluster is created, so
-  # task sec:status warns if the node is no longer inside it.
-  # Part B: the VPC CIDR.
-  cidr: 172.19.0.0/16
+  # Locally: the subnet of the k3d Docker network, pinned in
+  # k3d/sizjobs.yaml (ADR 0010); change both together. task sec:status
+  # still warns if the node is outside it, e.g. a cluster created before
+  # the pin. Part B: the VPC CIDR.
+  cidr: 10.100.0.0/24
   # 6443 is what the policy sees after the Service translation; 443 covers
   # a client that reaches the API on the Service port without translation.
   ports: [6443, 443]
