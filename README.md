@@ -75,6 +75,34 @@ that Docker is running, that WSL has enough free memory, and whether you are
 logged in to AWS. A missing tool or a stopped Docker fails it; low memory
 and no AWS login are only warnings.
 
+### On macOS
+
+The same steps work on a Mac with Docker Desktop, with these differences:
+
+- **Install mise with its official installer** (step 1), not Homebrew.
+  Homebrew has no prebuilt mise for Intel Macs and compiles it, cmake and
+  Rust from source.
+- **Shell startup files.** A bash login shell on macOS reads
+  `~/.bash_profile` and neither `~/.bashrc` nor `~/.profile`, so put both
+  lines from step 1 in `~/.bash_profile`. For zsh, use
+  `eval "$(~/.local/bin/mise activate zsh)"` in `~/.zshrc` and the shims
+  line in `~/.zprofile`. mise has to come first in `PATH`: older
+  `kubectl`, `helm` or `terraform` binaries in `/usr/local/bin` would win
+  otherwise (`which kubectl` should print a path under `~/.local/share/mise`).
+- **Docker Desktop memory.** The cluster runs in Docker Desktop's Linux VM,
+  so the VM plays the role of WSL: set Settings, Resources, Memory limit to
+  10 GB. With less, the node's 7 GiB cap leaves the VM nearly nothing.
+  `task doctor` reads the VM's memory, not the Mac's.
+- **registry.localhost (optional).** Add `127.0.0.1 registry.localhost` to
+  `/etc/hosts` (`sudo`; macOS keeps the file). Add
+  `"insecure-registries": ["registry.localhost:5000"]` in Docker Desktop,
+  Settings, Docker Engine, then Apply & restart.
+- **Ollama** is a Homebrew service: `brew install ollama`. `task llm:up` and
+  `task llm:down` call `brew services`, which needs no `sudo`.
+- **Secrets.** Copy the `.env` from the old machine to
+  `~/.config/sizjobs/.env` yourself and `chmod 600` it. Never paste it into a
+  chat.
+
 ## Local cluster
 
 One k3s node in Docker, created by [k3d](https://k3d.io) from

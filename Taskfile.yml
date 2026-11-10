@@ -176,25 +176,48 @@ tasks:
         else
           warn "registry.localhost:5000 is not in Docker's insecure-registries. See README, Local cluster, Pushing an image."
         fi
-        # getent asks the system resolver (/etc/hosts first), like Docker does.
-        if [ "$(getent hosts registry.localhost | awk '{print $1; exit}')" = 127.0.0.1 ]; then
+        # Ask the system resolver (/etc/hosts first), like Docker does:
+        # getent on Linux; macOS has no getent, dscacheutil is its equivalent.
+        if [ "$(uname -s)" = Darwin ]; then
+          resolved=$(dscacheutil -q host -a name registry.localhost | awk '/^ip_address:/ {print $2; exit}')
+        else
+          resolved=$(getent hosts registry.localhost | awk '{print $1; exit}')
+        fi
+        if [ "$resolved" = 127.0.0.1 ]; then
           ok "registry.localhost resolves to 127.0.0.1"
         else
           warn "registry.localhost does not resolve to 127.0.0.1. See README, Local cluster, Pushing an image."
         fi
 
         echo "==> Memory"
+        # The cluster lives in Docker, so what counts is the memory of the
+        # machine Docker runs on: WSL itself on Linux, but on macOS Docker
+        # Desktop's Linux VM, whose /proc/meminfo a throwaway container
+        # can read (macOS itself has no /proc).
+        if [ "$(uname -s)" = Darwin ]; then
+          where="Docker Desktop's VM"
+          meminfo=$(docker run --rm --quiet {{.BUSYBOX_IMAGE}} cat /proc/meminfo 2>/dev/null)
+        else
+          where="WSL"
+          meminfo=$(cat /proc/meminfo)
+        fi
         # MemAvailable counts free memory plus cache the kernel can drop,
         # which is what new pods can actually get. Values are in KiB.
-        total=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)
-        avail=$(awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo)
-        if [ "$avail" -lt {{.MIN_AVAILABLE_MIB}} ]; then
-          warn "$avail MiB available of $total MiB, below {{.MIN_AVAILABLE_MIB}} MiB. Stop Ollama or unused containers."
+        total=$(echo "$meminfo" | awk '/^MemTotal:/ {print int($2 / 1024)}')
+        avail=$(echo "$meminfo" | awk '/^MemAvailable:/ {print int($2 / 1024)}')
+        if [ -z "$total" ]; then
+          warn "could not read the memory of $where (is Docker running?)."
+        elif [ "$avail" -lt {{.MIN_AVAILABLE_MIB}} ]; then
+          warn "$avail MiB available of $total MiB in $where, below {{.MIN_AVAILABLE_MIB}} MiB. Stop Ollama or unused containers."
         else
-          ok "$avail MiB available of $total MiB"
+          ok "$avail MiB available of $total MiB in $where"
         fi
-        if [ "$total" -lt {{.MIN_TOTAL_MIB}} ]; then
-          warn "WSL has $total MiB in total. Set memory=10GB in %UserProfile%\\.wslconfig and run 'wsl --shutdown'."
+        if [ -n "$total" ] && [ "$total" -lt {{.MIN_TOTAL_MIB}} ]; then
+          if [ "$(uname -s)" = Darwin ]; then
+            warn "Docker Desktop's VM has $total MiB in total. Set Memory limit to 10 GB in Docker Desktop, Settings, Resources."
+          else
+            warn "WSL has $total MiB in total. Set memory=10GB in %UserProfile%\\.wslconfig and run 'wsl --shutdown'."
+          fi
         fi
 
         echo "==> AWS (profile ${AWS_PROFILE:-default}; not required for Part A)"
@@ -1163,9 +1186,10 @@ tasks:
     preconditions:
       - sh: test -f "$HOME/.config/sizjobs/.env"
         msg: "~/.config/sizjobs/.env not found. Create it: mkdir -p ~/.config/sizjobs && install -m 600 .env.example ~/.config/sizjobs/.env"
-      # stat -c %a prints the permission bits in octal; 600 means only you
-      # can read or write the file.
-      - sh: test "$(stat -c %a "$HOME/.config/sizjobs/.env")" = 600
+      # Both print the permission bits in octal; 600 means only you can
+      # read or write the file. `stat -c %a` is GNU (Linux); macOS's BSD
+      # stat spells it `stat -f %Lp` (%Lp: the low permission bits only).
+      - sh: test "$(stat -c %a "$HOME/.config/sizjobs/.env" 2>/dev/null || stat -f %Lp "$HOME/.config/sizjobs/.env")" = 600
         msg: "~/.config/sizjobs/.env must be mode 600 (only you can read it). Fix: chmod 600 ~/.config/sizjobs/.env"
     env:
       DRY_RUN: "{{.DRY_RUN}}"
@@ -1443,16 +1467,23 @@ tasks:
         k logs "$pod"
         [ "$phase" = Succeeded ] || { echo "==> llm:smoke: FAIL (pod phase ${phase:-unknown})"; exit 1; }
 
-  # Local model (a1-9): Ollama on the WSL host, for offline smoke tests.
-  # It is a systemd service installed by Ollama's script, so starting and
-  # stopping it needs sudo. A loaded model holds RAM the cluster needs:
-  # run llm:down when you are done.
+  # Local model (a1-9): Ollama on the host, for offline smoke tests.
+  # On WSL it is a systemd service installed by Ollama's script, so
+  # starting and stopping it needs sudo; on macOS it is a Homebrew service
+  # (brew install ollama), which does not. A loaded model holds RAM the
+  # cluster needs: run llm:down when you are done.
 
   llm:up:
     desc: Start the local Ollama service and wait until its API answers
     cmds:
       - |
-        if systemctl is-active --quiet ollama; then
+        if [ "$(uname -s)" = Darwin ]; then
+          # macOS: Homebrew's ollama formula runs as a per-user launchd
+          # service, so no sudo. `brew services start` is a no-op when it
+          # is already running.
+          echo "==> Starting Ollama (brew services start ollama)"
+          brew services start ollama
+        elif systemctl is-active --quiet ollama; then
           echo "==> Ollama is already running"
         else
           echo "==> Starting Ollama (sudo systemctl start ollama)"
@@ -1468,14 +1499,24 @@ tasks:
           fi
           sleep 1
         done
-        echo "==> Ollama did not answer within 30s. Logs: journalctl -u ollama -n 50"
+        if [ "$(uname -s)" = Darwin ]; then
+          echo "==> Ollama did not answer within 30s. Logs: $(brew --prefix)/var/log/ollama.log"
+        else
+          echo "==> Ollama did not answer within 30s. Logs: journalctl -u ollama -n 50"
+        fi
         exit 1
 
   llm:down:
     desc: Stop the local Ollama service to free its RAM
     cmds:
-      - echo "==> Stopping Ollama (sudo systemctl stop ollama)"
-      - sudo systemctl stop ollama
+      - |
+        if [ "$(uname -s)" = Darwin ]; then
+          echo "==> Stopping Ollama (brew services stop ollama)"
+          brew services stop ollama
+        else
+          echo "==> Stopping Ollama (sudo systemctl stop ollama)"
+          sudo systemctl stop ollama
+        fi
       - echo "==> Stopped."
 
   smoke:

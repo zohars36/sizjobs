@@ -60,7 +60,7 @@ def check_models(client):
     try:
         ids = {m.id for m in client.models.list()}
     except openai.APIConnectionError:
-        hint = " Ollama not running? sudo systemctl start ollama (or task llm:up)"
+        hint = " Ollama not running? Start it with task llm:up"
         report(
             False, name, started, f"cannot reach {BASE_URL}.{hint if IS_OLLAMA else ''}"
         )
